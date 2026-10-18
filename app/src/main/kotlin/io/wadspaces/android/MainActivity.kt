@@ -52,13 +52,17 @@ class MainActivity : ComponentActivity() {
         val fake = intent.getBooleanExtra("fake", false)
         val start = intent.getStringExtra("screen")
         // Debug builds: a stream's sign-in link, opened straight
-        // (PHONE=1 wadspaces/apps/wadd/dev/try-tunnel.sh).
+        // (PHONE=1 wadspaces/apps/wadd/dev/try-tunnel.sh), and its machine's
+        // screen if given ("<width>x<height>@<scale>").
         val stream = intent.getStringExtra("stream")
         if (BuildConfig.DEBUG && stream != null && savedInstanceState == null) {
             startActivity(
                 Intent(this, StreamActivity::class.java)
                     .putExtra(StreamActivity.URL, stream)
-                    .putExtra(StreamActivity.TITLE, "Laptop stream"),
+                    .putExtra(StreamActivity.TITLE, "Laptop stream")
+                    .putExtra(StreamActivity.MACHINE, "laptop")
+                    .putExtra(StreamActivity.MACHINE_NAME, "the laptop")
+                    .putExtra(StreamActivity.SCREEN, intent.getStringExtra("screen")),
             )
         }
         val factory = object : ViewModelProvider.Factory {

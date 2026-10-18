@@ -237,7 +237,10 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
                         stream.launch(
                             Intent(ctx, StreamActivity::class.java)
                                 .putExtra(StreamActivity.URL, s.openLink.ifEmpty { s.link })
-                                .putExtra(StreamActivity.TITLE, name),
+                                .putExtra(StreamActivity.TITLE, name)
+                                .putExtra(StreamActivity.MACHINE, m.id)
+                                .putExtra(StreamActivity.MACHINE_NAME, m.name)
+                                .putExtra(StreamActivity.SCREEN, m.screen?.let(StreamActivity::screenText)),
                         )
                     },
                     Modifier.fillMaxWidth(),

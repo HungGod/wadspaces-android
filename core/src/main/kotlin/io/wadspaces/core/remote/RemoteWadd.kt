@@ -66,6 +66,13 @@ data class Target(val host: String, val port: Int) {
     val base get() = if (':' in host) "http://[$host]:$port" else "http://$host:$port"
 }
 
+/** A machine's screen as its compositor has it: the logical size, and its scale. */
+data class Screen(val width: Int, val height: Int, val scale: Double) {
+    /** Its pixels, as the panel shows them. */
+    val pixelWidth get() = Math.round(width * scale).toInt()
+    val pixelHeight get() = Math.round(height * scale).toInt()
+}
+
 /** One of the owner's machines, from its heartbeat. */
 data class Machine(
     val id: String,
@@ -76,6 +83,8 @@ data class Machine(
     val target: Target?,
     /** The layers built there ("template:<id>", "custom:<id>"), as its heartbeat lists its images. */
     val layers: Set<String> = emptySet(),
+    /** Its screen, when it has one (a stream defaults to the same). */
+    val screen: Screen? = null,
 ) {
     companion object {
         /** Heartbeats within this long: online (the client's ONLINE_WITHIN). */
@@ -87,6 +96,8 @@ data class Machine(
             val ip = (t?.get("ips") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }
                 ?.filter(RemoteWadd::onTailnet)?.sortedBy { ':' in it }?.firstOrNull()
             val seen = Values.toMs(heartbeat["lastSeen"] ?: JsonNull)
+            val s = heartbeat["screen"] as? JsonObject
+            val num = { k: String -> (s?.get(k) as? JsonPrimitive)?.content?.toDoubleOrNull() ?: 0.0 }
             return Machine(
                 id = heartbeat.str("id"),
                 name = heartbeat.str("name").ifEmpty { heartbeat.str("hostname") }.ifEmpty { "A machine" },
@@ -94,6 +105,8 @@ data class Machine(
                 tailnet = t.str("state").ifEmpty { "off" },
                 target = ip?.takeIf { t.str("state") == "running" }?.let { Target(it, port) },
                 layers = (heartbeat["images"] as? JsonArray)?.map { it.str("layer") }?.filter { it.isNotEmpty() }?.toSet() ?: emptySet(),
+                screen = Screen(num("width").toInt(), num("height").toInt(), num("scale").takeIf { it > 0 } ?: 1.0)
+                    .takeIf { it.width > 0 && it.height > 0 },
             )
         }
     }
