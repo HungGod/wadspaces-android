@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- wadd's remote API is plain HTTP inside the tailnet's WireGuard, at a
+     machine's 100.x (or fd7a:115c:a1e0::) address. A config can't name an
+     address range, so cleartext is allowed here and RemoteWadd refuses any
+     address outside the tailnet's ranges itself. Everything else (Firebase,
+     GitHub, the stream) is HTTPS. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

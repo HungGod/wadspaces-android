@@ -1,0 +1,10 @@
+.gradle/
+.kotlin/
+build/
+captures/
+.idea/
+*.iml
+local.properties
+# The account's Firebase settings (scripts/sync-wadspaces.sh writes it from
+# ../wadspaces/host/secrets/firebase.toml).
+wadspaces.properties
