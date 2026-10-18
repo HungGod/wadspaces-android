@@ -2,6 +2,7 @@ package io.wadspaces.android
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -13,7 +14,9 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -24,6 +27,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -32,9 +36,17 @@ import kotlin.math.abs
 /**
  * A wadspace streamed into the app: its sign-in link (from the machine,
  * over the tailnet) in a full-screen WebView, sideways. A small button
- * (drag it out of the way) has Refresh, Back to WadSpaces (the stream keeps
- * running) and Stop streaming; Back asks the same. A page that comes back
- * 5xx (the stream not answering for a moment) is tried again by itself.
+ * (drag it out of the way) has Keyboard, Refresh, Back to WadSpaces (the
+ * stream keeps running) and Stop streaming; Back opens it too.
+ *
+ * The page is never resized: Selkies sends the machine a new desktop size
+ * on every resize, so a keyboard opening and closing re-sized the remote
+ * desktop and its video each time (slow on a phone, and heavy enough to
+ * run it out of memory). The keyboard's space is taken here instead, and
+ * the stream slid up just enough to keep the place last tapped above it.
+ * A page that comes back 5xx is tried again by itself, and a page whose
+ * process stops (the phone short of memory) is opened again rather than
+ * taking the app with it.
  */
 class StreamActivity : ComponentActivity() {
     companion object {
@@ -44,14 +56,26 @@ class StreamActivity : ComponentActivity() {
         const val STOP = "stop"
         const val HOME = "home"
         private const val RETRIES = 10
+        /** A page process that stops more often than this isn't reopened by itself. */
+        private const val REOPENS = 2
+        /** Selkies' hidden input the phone's keyboard types into. */
+        private const val ASSIST = "keyboard-input-assist"
     }
 
-    private lateinit var web: WebView
+    private lateinit var root: FrameLayout
     private lateinit var note: TextView
+    private var web: WebView? = null
     private val main = Handler(Looper.getMainLooper())
+    private var url = ""
     private var retries = 0
+    private var reopens = 0
+    /** Where the stream was last touched (the page's own y), and the keyboard's height. */
+    private var touchY = 0f
+    private var ime = 0
 
-    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -60,52 +84,21 @@ class StreamActivity : ComponentActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
-        val url = intent.getStringExtra(URL).orEmpty()
+        url = intent.getStringExtra(URL).orEmpty()
         title = intent.getStringExtra(TITLE) ?: "WadSpaces"
         // Only a stream's own https page.
         if (!url.startsWith("https://")) {
             finish()
             return
         }
-        val host = Uri.parse(url).host
         CookieManager.getInstance().setAcceptCookie(true)
-        web = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
-            settings.useWideViewPort = true
-            settings.loadWithOverviewMode = true
-            webChromeClient = WebChromeClient()
-            webViewClient = object : WebViewClient() {
-                // The stream's site stays in here; anything else isn't followed.
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-                    request.url.host != host
-
-                override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                    if (request.isForMainFrame && response.statusCode >= 500) notAnswering("${response.statusCode}")
-                }
-
-                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame) notAnswering(error.description?.toString() ?: "no answer")
-                }
-
-                override fun onPageFinished(view: WebView, url: String) {
-                    // Loaded fine: no note, and a fresh count of tries.
-                    if (note.tag != "retrying") {
-                        note.visibility = View.GONE
-                        retries = 0
-                    }
-                    note.tag = null
-                }
-            }
-            loadUrl(url)
-        }
+        root = FrameLayout(this)
         note = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 14f
-            setPadding(32, 20, 32, 20)
+            setPadding(dp(16), dp(10), dp(16), dp(10))
             background = GradientDrawable().apply {
-                cornerRadius = 24f
+                cornerRadius = dp(12).toFloat()
                 setColor(Color.argb(200, 20, 13, 34))
             }
             visibility = View.GONE
@@ -122,12 +115,21 @@ class StreamActivity : ComponentActivity() {
             }
             contentDescription = "Stream menu"
         }
-        val size = (44 * resources.displayMetrics.density).toInt()
-        val root = FrameLayout(this)
-        root.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        root.addView(makeWeb(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(note, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        root.addView(menu, FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.END).apply { setMargins(0, size / 2, size / 2, 0) })
+        root.addView(menu, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(22), dp(22), 0) })
         setContentView(root)
+
+        // The keyboard: its space taken here (the page never hears of it),
+        // and the stream slid up to keep the place tapped above it.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val shown = insets.isVisible(WindowInsetsCompat.Type.ime())
+            val h = if (shown) insets.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0
+            if (ime > 0 && h == 0) releaseInput()
+            ime = h
+            pan()
+            WindowInsetsCompat.CONSUMED
+        }
 
         // The menu button: a tap opens it; a drag moves it out of the way.
         var downX = 0f
@@ -162,14 +164,116 @@ class StreamActivity : ComponentActivity() {
         })
     }
 
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+    private fun makeWeb(): WebView {
+        val host = Uri.parse(url).host
+        val w = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            webChromeClient = WebChromeClient()
+            webViewClient = object : WebViewClient() {
+                // The stream's site stays in here; anything else isn't followed.
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                    request.url.host != host
+
+                override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                    if (request.isForMainFrame && response.statusCode >= 500) notAnswering("${response.statusCode}")
+                }
+
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    if (request.isForMainFrame) notAnswering(error.description?.toString() ?: "no answer")
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    // Loaded fine: no note, and a fresh count of tries.
+                    if (note.tag != "retrying") {
+                        note.visibility = View.GONE
+                        retries = 0
+                    }
+                    note.tag = null
+                }
+
+                // The page's process stopped (killed for memory, or crashed):
+                // the app carries on, and the stream opens again.
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    if (view !== web) return true
+                    root.removeView(view)
+                    view.destroy()
+                    web = null
+                    reopens++
+                    val why = if (detail.didCrash()) "it crashed" else "the phone ran short of memory"
+                    if (reopens > REOPENS) {
+                        say("The stream's page stopped again ($why). Close other apps, then Refresh from the menu.")
+                    } else {
+                        say("The stream's page stopped ($why): opening it again…")
+                        main.postDelayed({ reopen() }, 1_500)
+                    }
+                    return true
+                }
+            }
+            // Where the stream's touched last: the place to keep above the keyboard.
+            setOnTouchListener { _, e ->
+                if (e.actionMasked == MotionEvent.ACTION_DOWN) touchY = e.y
+                false
+            }
+            loadUrl(this@StreamActivity.url)
+        }
+        web = w
+        return w
+    }
+
+    /** The page again, in a new WebView (after its process stopped, or from Refresh). */
+    private fun reopen() {
+        if (isFinishing) return
+        web?.let {
+            root.removeView(it)
+            it.destroy()
+        }
+        root.addView(makeWeb(), 0, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        pan()
+    }
+
+    /** The stream slid up so the place last tapped stays above the keyboard (no keyboard: back down). */
+    private fun pan() {
+        val w = web ?: return
+        val visible = root.height - ime
+        w.translationY = if (ime == 0) 0f else (visible - dp(56) - touchY).coerceIn(-ime.toFloat(), 0f)
+    }
+
+    /**
+     * The keyboard went (its own close arrow too): Selkies' input let go, so
+     * the next tap focuses it again and the keyboard comes back.
+     */
+    private fun releaseInput() {
+        web?.evaluateJavascript(
+            "(function(){var e=document.activeElement;if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'))e.blur();})()",
+            null,
+        )
+    }
+
+    /** The keyboard up, typing into the stream. */
+    private fun showKeyboard() {
+        val w = web ?: return
+        w.evaluateJavascript(
+            "(function(){var e=document.getElementById('$ASSIST');if(!e)return false;e.blur();e.focus();return true;})()",
+        ) {
+            w.requestFocus()
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(w, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
     private fun showMenu() {
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setItems(arrayOf("Refresh", "Back to WadSpaces (keeps streaming)", "Stop streaming")) { _, which ->
+            .setItems(arrayOf("Keyboard", "Refresh", "Back to WadSpaces (keeps streaming)", "Stop streaming")) { _, which ->
                 when (which) {
-                    0 -> refresh()
-                    1 -> done(stop = false, home = true)
-                    2 -> done(stop = true, home = false)
+                    0 -> showKeyboard()
+                    1 -> refresh()
+                    2 -> done(stop = false, home = true)
+                    3 -> done(stop = true, home = false)
                 }
             }
             .setNegativeButton("Stay", null)
@@ -178,22 +282,27 @@ class StreamActivity : ComponentActivity() {
 
     private fun refresh() {
         retries = 0
+        reopens = 0
         note.visibility = View.GONE
-        web.reload()
+        val w = web
+        if (w == null) reopen() else w.reload()
+    }
+
+    private fun say(text: String) {
+        note.text = text
+        note.visibility = View.VISIBLE
     }
 
     /** The page didn't come (the stream not answering for a moment): tried again shortly. */
     private fun notAnswering(why: String) {
         if (retries >= RETRIES) {
-            note.text = "The stream isn't answering ($why). Refresh from the menu, or go back."
-            note.visibility = View.VISIBLE
+            say("The stream isn't answering ($why). Refresh from the menu, or go back.")
             return
         }
         retries++
-        note.text = "The stream isn't answering yet ($why): trying again…"
         note.tag = "retrying"
-        note.visibility = View.VISIBLE
-        main.postDelayed({ if (!isFinishing) web.reload() }, 3_000)
+        say("The stream isn't answering yet ($why): trying again…")
+        main.postDelayed({ if (!isFinishing) web?.reload() }, 3_000)
     }
 
     private fun done(stop: Boolean, home: Boolean) {
@@ -203,7 +312,8 @@ class StreamActivity : ComponentActivity() {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
-        if (::web.isInitialized) web.destroy()
+        web?.destroy()
+        web = null
         super.onDestroy()
     }
 }
