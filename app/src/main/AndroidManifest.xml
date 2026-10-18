@@ -25,6 +25,6 @@
             android:exported="false"
             android:screenOrientation="fullUser"
             android:theme="@style/Theme.WadSpaces.Stream"
-            android:windowSoftInputMode="adjustResize|stateHidden" />
+            android:windowSoftInputMode="adjustNothing|stateHidden" />
     </application>
 </manifest>

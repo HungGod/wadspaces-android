@@ -69,11 +69,11 @@ import org.json.JSONObject
  * the stream. A WebView that can't hand chunks over decodes on the page, in
  * software.
  *
- * The keyboard doesn't resize the page: its space is taken here, and the
- * stream slid up just enough to keep the place last tapped above it. A page
- * that comes back 5xx is tried again by itself, and a page whose process
- * stops (the phone short of memory) is opened again rather than taking the
- * app with it.
+ * The keyboard goes over the stream: the page is neither resized nor moved
+ * (a resize would also give the remote desktop a new size). A page that
+ * comes back 5xx is tried again by itself, and a page whose process stops
+ * (the phone short of memory) is opened again rather than taking the app
+ * with it.
  */
 class StreamActivity : ComponentActivity() {
     companion object {
@@ -159,9 +159,8 @@ window.__wadView = window.__wadView || (function () {
     private var url = ""
     private var retries = 0
     private var reopens = 0
-    /** Where the stream was last touched (the page's own y), and the keyboard's height. */
-    private var touchY = 0f
-    private var ime = 0
+    /** The keyboard's up (its going lets Selkies' input go). */
+    private var imeShown = false
     private var screen: Screen? = null
     private lateinit var resolution: Resolution
     private var adjusting = false
@@ -226,14 +225,12 @@ window.__wadView = window.__wadView || (function () {
         root.addView(controls, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { setMargins(0, dp(22), dp(22), 0) })
         setContentView(root)
 
-        // The keyboard: its space taken here (the page never hears of it),
-        // and the stream slid up to keep the place tapped above it.
+        // The keyboard goes over the stream: its insets stop here, so the
+        // page is neither resized nor moved.
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val shown = insets.isVisible(WindowInsetsCompat.Type.ime())
-            val h = if (shown) insets.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0
-            if (ime > 0 && h == 0) releaseInput()
-            ime = h
-            pan()
+            if (imeShown && !shown) releaseInput()
+            imeShown = shown
             WindowInsetsCompat.CONSUMED
         }
         // Turned around: the buttons kept on the screen, and the view kept
@@ -346,11 +343,6 @@ window.__wadView = window.__wadView || (function () {
                     return true
                 }
             }
-            // Where the stream's touched last: the place to keep above the keyboard.
-            setOnTouchListener { _, e ->
-                if (e.actionMasked == MotionEvent.ACTION_DOWN) touchY = e.y
-                false
-            }
             if (video != null) {
                 // See-through: the phone's video is under it.
                 setBackgroundColor(Color.TRANSPARENT)
@@ -427,7 +419,7 @@ window.__wadView = window.__wadView || (function () {
         }
     }
 
-    /** The phone's video laid where the page shows the stream (and slid with it for the keyboard). */
+    /** The phone's video laid where the page shows the stream. */
     private fun placeVideo() {
         val b = videoBox ?: return
         val d = resources.displayMetrics.density
@@ -440,7 +432,7 @@ window.__wadView = window.__wadView || (function () {
             videoView.layoutParams = lp
         }
         videoView.translationX = b[0] * d
-        videoView.translationY = b[1] * d + (web?.translationY ?: 0f)
+        videoView.translationY = b[1] * d
     }
 
     /** A keyframe from the machine (the phone's decoder starts or catches up on one). */
@@ -578,7 +570,7 @@ window.__wadView = window.__wadView || (function () {
         root.postOnAnimation {
             flushing = false
             val d = resources.displayMetrics.density
-            val about = if (pendingF != 1f) "f:$pendingF,x:${pendingX / d},y:${(pendingY - (web?.translationY ?: 0f)) / d}," else ""
+            val about = if (pendingF != 1f) "f:$pendingF,x:${pendingX / d},y:${pendingY / d}," else ""
             view("{${about}dx:${pendingDx / d},dy:${pendingDy / d}}")
             pendingF = 1f
             pendingDx = 0f
@@ -601,15 +593,6 @@ window.__wadView = window.__wadView || (function () {
         // Above the phone's video, if there is one.
         val at = if (video != null) root.indexOfChild(videoView) + 1 else 0
         root.addView(makeWeb(), at, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        pan()
-    }
-
-    /** The stream slid up so the place last tapped stays above the keyboard (no keyboard: back down). */
-    private fun pan() {
-        val w = web ?: return
-        val visible = root.height - ime
-        w.translationY = if (ime == 0) 0f else (visible - dp(56) - touchY).coerceIn(-ime.toFloat(), 0f)
-        placeVideo()
     }
 
     /**
