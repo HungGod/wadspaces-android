@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -42,6 +43,7 @@ import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import io.wadspaces.core.remote.Screen
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -104,6 +106,11 @@ class StreamActivity : ComponentActivity() {
         private val ACCENT = 0xFFC6FF1F.toInt()
         private val ON_ACCENT = 0xFF0A0614.toInt()
         private const val IDLE = 0.85f
+        /** Around the stream: WadSpaces' background and edge, dark or light as the phone is. */
+        private val BG_DARK = 0xFF0A0614.toInt()
+        private val BG_LIGHT = 0xFFF7F5FB.toInt()
+        private val EDGE_DARK = 0x2EF0EAFA
+        private val EDGE_LIGHT = 0x2E0A0614
 
         /**
          * Selkies' keyboard button in the same colours as the app's: round,
@@ -137,8 +144,10 @@ class StreamActivity : ComponentActivity() {
 
         /**
          * The view's pan and zoom, kept in the page: commands of a zoom
-         * about a point and a move (CSS pixels), the stream kept on the
-         * screen (centred while it's smaller than it).
+         * about a point (¼x to 8x) and a move (CSS pixels). The stream goes
+         * past the screen's edges as a canvas does, onto WadSpaces' own
+         * background, with a corner of it (64 px, or half of it) kept in
+         * sight.
          */
         private const val VIEW = """
 window.__wadView = window.__wadView || (function () {
@@ -154,14 +163,15 @@ window.__wadView = window.__wadView || (function () {
     return null;
   }
   function keep(t, x0, w, v) {
-    return w * z <= v ? (v - w * z) / 2 - x0 * z : Math.min(-x0 * z, Math.max(v - (x0 + w) * z, t));
+    var m = Math.min(64, w * z / 2);
+    return Math.min(v - m - x0 * z, Math.max(m - (x0 + w) * z, t));
   }
   return function (c) {
     var b = box(), k = document.querySelector('.video-container');
     if (!b || !k) return z;
     if (c.reset) { z = 1; tx = 0; ty = 0; }
     if (c.f) {
-      var n = Math.min(8, Math.max(1, z * c.f));
+      var n = Math.min(8, Math.max(0.25, z * c.f));
       tx = c.x - (c.x - tx) * n / z; ty = c.y - (c.y - ty) * n / z; z = n;
     }
     tx += c.dx || 0; ty += c.dy || 0;
@@ -186,6 +196,8 @@ window.__wadView = window.__wadView || (function () {
     /** The phone's decoder and the view it draws into, under the page (none: the page decodes). */
     private var video: NativeVideo? = null
     private lateinit var videoView: SurfaceView
+    /** The stream's edge on the background, a pixel outside it. */
+    private lateinit var videoEdge: View
     /** Where the page shows the stream: x, y, width, height in CSS pixels. */
     private var videoBox: FloatArray? = null
     private val main = Handler(Looper.getMainLooper())
@@ -227,7 +239,7 @@ window.__wadView = window.__wadView || (function () {
         val kept = getSharedPreferences("stream", MODE_PRIVATE).getString(resolutionKey(), null)
         resolution = resolutions().let { all -> all.firstOrNull { it.id == kept } ?: all.first() }
         CookieManager.getInstance().setAcceptCookie(true)
-        root = FrameLayout(this)
+        root = FrameLayout(this).apply { setBackgroundColor(pasteboard()) }
         note = TextView(this).apply {
             setTextColor(FG)
             textSize = 14f
@@ -250,7 +262,9 @@ window.__wadView = window.__wadView || (function () {
         if (canDecodeNatively()) {
             val v = NativeVideo(::askKeyframe)
             video = v
+            videoEdge = View(this).apply { background = GradientDrawable().apply { setStroke(dp(1), edge()) } }
             videoView = SurfaceView(this).apply { holder.addCallback(v) }
+            root.addView(videoEdge, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
             root.addView(videoView, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
         }
         root.addView(makeWeb(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -423,10 +437,19 @@ window.__wadView = window.__wadView || (function () {
         }
         return "try{var p=(location.origin+location.pathname).replace(/[^a-zA-Z0-9._-]/g,'_')+'_'," +
             "s=function(k,v){localStorage.setItem(p+k,v)},rm=function(k){localStorage.removeItem(p+k)};" +
-            "$decode$size}catch(e){}$VIEW" + styleJs(KEYBOARD_BUTTON) + (if (video != null) nativeVideoJs else "")
+            "$decode$size}catch(e){}$VIEW" + styleJs(KEYBOARD_BUTTON) + (if (video != null) nativeVideoJs else styleJs(pageBackground()))
     }
 
     private val nativeVideoJs by lazy { assets.open("native-video.js").bufferedReader().use { it.readText() } }
+
+    /** A page that decodes itself: WadSpaces' background around its stream, and the stream's edge. */
+    private fun pageBackground(): String {
+        val bg = "#%06X".format(pasteboard() and 0xFFFFFF)
+        val e = edge()
+        val edge = "rgba(${(e shr 16) and 0xFF}, ${(e shr 8) and 0xFF}, ${e and 0xFF}, ${String.format(Locale.ROOT, "%.2f", ((e ushr 24) and 0xFF) / 255f)})"
+        return "html, body, #app, #root, .video-container { background: $bg !important; }" +
+            "#videoStream, #videoCanvas, #videoWorkerCanvas { box-shadow: 0 0 0 1px $edge; }"
+    }
 
     /** The phone's decoder is used when this WebView can hand binary messages to the app. */
     private fun canDecodeNatively() =
@@ -475,6 +498,31 @@ window.__wadView = window.__wadView || (function () {
         }
         videoView.translationX = b[0] * d
         videoView.translationY = b[1] * d
+        val e = dp(1)
+        val elp = videoEdge.layoutParams as FrameLayout.LayoutParams
+        if (elp.width != w + 2 * e || elp.height != h + 2 * e) {
+            elp.width = w + 2 * e
+            elp.height = h + 2 * e
+            videoEdge.layoutParams = elp
+        }
+        videoEdge.translationX = b[0] * d - e
+        videoEdge.translationY = b[1] * d - e
+    }
+
+    private fun night() =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    /** What's around the stream: WadSpaces' background, dark or light as the phone is. */
+    private fun pasteboard() = if (night()) BG_DARK else BG_LIGHT
+
+    private fun edge() = if (night()) EDGE_DARK else EDGE_LIGHT
+
+    // The phone went dark or light: the background with it (the page's own
+    // colours, when it decodes, follow at its next load).
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        root.setBackgroundColor(pasteboard())
+        if (video != null) (videoEdge.background as GradientDrawable).setStroke(dp(1), edge())
     }
 
     /** A keyframe from the machine (the phone's decoder starts or catches up on one). */
