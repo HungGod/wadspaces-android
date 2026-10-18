@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -38,10 +37,10 @@ import kotlin.math.abs
 
 /**
  * A wadspace streamed into the app: its sign-in link (from the machine,
- * over the tailnet) in a full-screen WebView that turns with the phone (the
- * remote desktop takes the new shape). A small button (drag it out of the
- * way) has Keyboard, Refresh, Lock rotation, Back to WadSpaces (the stream
- * keeps running) and Stop streaming; Back opens it too.
+ * over the tailnet) in a full-screen WebView that turns with the phone as
+ * its auto-rotate setting allows (the remote desktop takes the new shape).
+ * A small button (drag it out of the way) has Keyboard, Refresh, Back to
+ * WadSpaces (the stream keeps running) and Stop streaming; Back opens it too.
  *
  * Selkies decodes in software here: the WebView kept every frame its
  * hardware decoder made (a moto g15: about 4 MB a frame, a gigabyte in
@@ -87,7 +86,6 @@ class StreamActivity : ComponentActivity() {
     /** Where the stream was last touched (the page's own y), and the keyboard's height. */
     private var touchY = 0f
     private var ime = 0
-    private var rotationLocked = false
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -292,32 +290,16 @@ class StreamActivity : ComponentActivity() {
     private fun showMenu() {
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setItems(
-                arrayOf(
-                    "Keyboard",
-                    "Refresh",
-                    if (rotationLocked) "Unlock rotation" else "Lock rotation",
-                    "Back to WadSpaces (keeps streaming)",
-                    "Stop streaming",
-                ),
-            ) { _, which ->
+            .setItems(arrayOf("Keyboard", "Refresh", "Back to WadSpaces (keeps streaming)", "Stop streaming")) { _, which ->
                 when (which) {
                     0 -> showKeyboard()
                     1 -> refresh()
-                    2 -> lockRotation(!rotationLocked)
-                    3 -> done(stop = false, home = true)
-                    4 -> done(stop = true, home = false)
+                    2 -> done(stop = false, home = true)
+                    3 -> done(stop = true, home = false)
                 }
             }
             .setNegativeButton("Stay", null)
             .show()
-    }
-
-    /** Held the way it's turned now (lying down), or following the phone again. */
-    private fun lockRotation(lock: Boolean) {
-        rotationLocked = lock
-        requestedOrientation =
-            if (lock) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
     }
 
     private fun refresh() {
