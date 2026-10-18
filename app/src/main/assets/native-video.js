@@ -1,11 +1,11 @@
 // The stream page's video goes to the phone's own decoder (the app's
 // MediaCodec, drawn under this page): Selkies keeps the connection, input,
 // audio and everything else, and its VideoDecoder is this stand-in, which
-// hands each encoded chunk to the app over `wadVideo` (an androidx.webkit
+// hands each encoded chunk to the app over `wadPage` (an androidx.webkit
 // message listener). Selkies still gets a frame per chunk, so its pacing,
 // stats and watchdogs carry on: a 2x2 blank the stream's size, shown nowhere.
 (function () {
-  var bridge = window.wadVideo;
+  var bridge = window.wadPage;
   // Not on the sign-in page (/open): it has no video, and keeps its own background.
   if (!bridge || window.__wadNativeVideo || location.pathname === '/open') return;
   window.__wadNativeVideo = true;
@@ -93,27 +93,6 @@
     (document.head || document.documentElement).appendChild(style);
   }
   if (document.documentElement) hide(); else document.addEventListener('DOMContentLoaded', hide);
-
-  // Where the stream is on the page (zoomed and moved too), to the app on
-  // every change: its video is laid exactly there.
-  var last = '';
-  function box() {
-    var ids = ['videoStream', 'videoWorkerCanvas', 'videoCanvas'];
-    for (var i = 0; i < ids.length; i++) {
-      var e = document.getElementById(ids[i]);
-      if (!e) continue;
-      var r = e.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) {
-        var at = [r.left, r.top, r.width, r.height].map(function (v) { return Math.round(v * 2) / 2; });
-        var key = at.join(',');
-        if (key !== last) {
-          last = key;
-          send({ type: 'box', x: at[0], y: at[1], w: at[2], h: at[3] });
-        }
-        break;
-      }
-    }
-    requestAnimationFrame(box);
-  }
-  requestAnimationFrame(box);
+  // Where the stream sits goes to the app with the view's own script
+  // (window.__wadView), which the app's video is laid by.
 })();

@@ -16,7 +16,6 @@ import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.util.Base64
-import android.view.ScaleGestureDetector
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
@@ -143,44 +142,47 @@ class StreamActivity : ComponentActivity() {
         fun screenText(s: Screen) = "${s.width}x${s.height}@${s.scale}"
 
         /**
-         * The view's pan and zoom, kept in the page: commands of a zoom
-         * about a point (¼x to 8x) and a move (CSS pixels). The stream goes
-         * past the screen's edges as a canvas does, onto WadSpaces' own
-         * background, with a corner of it (64 px, or half of it) kept in
-         * sight.
+         * The view's pan and zoom in the page, as the app sets it: the
+         * stream's container scaled and moved (CSS pixels), so taps land
+         * where they look to. Where the stream sits unzoomed goes to the app
+         * on every change (over `wadPage`), for it to lay its video and keep
+         * the view on the stream.
          */
         private const val VIEW = """
 window.__wadView = window.__wadView || (function () {
-  var z = 1, tx = 0, ty = 0;
-  function box() {
-    var ids = ['videoStream', 'videoWorkerCanvas', 'videoCanvas'];
-    for (var i = 0; i < ids.length; i++) {
+  var z = 1, tx = 0, ty = 0, last = '';
+  function report() {
+    var bridge = window.wadPage, ids = ['videoStream', 'videoWorkerCanvas', 'videoCanvas'];
+    for (var i = 0; bridge && i < ids.length; i++) {
       var e = document.getElementById(ids[i]);
       if (!e) continue;
       var r = e.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) return { x: (r.left - tx) / z, y: (r.top - ty) / z, w: r.width / z, h: r.height / z };
+      if (r.width > 0 && r.height > 0) {
+        var at = [(r.left - tx) / z, (r.top - ty) / z, r.width / z, r.height / z].map(function (v) { return Math.round(v * 2) / 2; });
+        if (at.join(',') !== last) {
+          last = at.join(',');
+          bridge.postMessage(JSON.stringify({ type: 'box', x: at[0], y: at[1], w: at[2], h: at[3] }));
+        }
+        break;
+      }
     }
-    return null;
+    requestAnimationFrame(report);
   }
-  function keep(t, x0, w, v) {
-    var m = Math.min(64, w * z / 2);
-    return Math.min(v - m - x0 * z, Math.max(m - (x0 + w) * z, t));
-  }
-  return function (c) {
-    var b = box(), k = document.querySelector('.video-container');
-    if (!b || !k) return z;
-    if (c.reset) { z = 1; tx = 0; ty = 0; }
-    if (c.f) {
-      var n = Math.min(8, Math.max(0.25, z * c.f));
-      tx = c.x - (c.x - tx) * n / z; ty = c.y - (c.y - ty) * n / z; z = n;
-    }
-    tx += c.dx || 0; ty += c.dy || 0;
-    tx = keep(tx, b.x, b.w, innerWidth); ty = keep(ty, b.y, b.h, innerHeight);
+  requestAnimationFrame(report);
+  return function (nz, nx, ny) {
+    z = nz; tx = nx; ty = ny;
+    var k = document.querySelector('.video-container');
+    if (!k) return;
     k.style.transformOrigin = '0 0';
     k.style.transform = z === 1 && Math.abs(tx) < 0.5 && Math.abs(ty) < 0.5 ? '' : 'translate(' + tx + 'px,' + ty + 'px) scale(' + z + ')';
-    return z;
   };
 })();"""
+
+        /** The view's zoom, out and in. */
+        private const val MIN_ZOOM = 0.25f
+        private const val MAX_ZOOM = 8f
+        /** How much of the stream (CSS pixels, or half of it) always stays in sight. */
+        private const val KEEP = 64f
     }
 
     /** A size for the remote desktop: its pixels and Selkies' DPI (width 0: the phone's own, as it turns). */
@@ -197,9 +199,14 @@ window.__wadView = window.__wadView || (function () {
     private var video: NativeVideo? = null
     private lateinit var videoView: SurfaceView
     /** The stream's edge on the background, a pixel outside it. */
-    private lateinit var videoEdge: View
-    /** Where the page shows the stream: x, y, width, height in CSS pixels. */
-    private var videoBox: FloatArray? = null
+    private lateinit var videoEdge: Edge
+    /** Where the page shows the stream unzoomed: x, y, width, height in CSS pixels. */
+    private var baseBox: FloatArray? = null
+    /** The view's zoom and its move (CSS pixels), as the page's container has them. */
+    private var viewZ = 1f
+    private var viewX = 0f
+    private var viewY = 0f
+    private var syncing = false
     private val main = Handler(Looper.getMainLooper())
     private var url = ""
     private var retries = 0
@@ -209,13 +216,6 @@ window.__wadView = window.__wadView || (function () {
     private var screen: Screen? = null
     private lateinit var resolution: Resolution
     private var adjusting = false
-    /** A pan and zoom not yet sent to the page (one a frame). */
-    private var pendingF = 1f
-    private var pendingX = 0f
-    private var pendingY = 0f
-    private var pendingDx = 0f
-    private var pendingDy = 0f
-    private var flushing = false
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -262,9 +262,9 @@ window.__wadView = window.__wadView || (function () {
         if (canDecodeNatively()) {
             val v = NativeVideo(::askKeyframe)
             video = v
-            videoEdge = View(this).apply { background = GradientDrawable().apply { setStroke(dp(1), edge()) } }
+            videoEdge = Edge().apply { color(edge()) }
             videoView = SurfaceView(this).apply { holder.addCallback(v) }
-            root.addView(videoEdge, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
+            root.addView(videoEdge, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             root.addView(videoView, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
         }
         root.addView(makeWeb(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -286,7 +286,7 @@ window.__wadView = window.__wadView || (function () {
         root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or_, ob ->
             controls.translationX = controls.translationX.coerceIn(-controls.left.toFloat(), (root.width - controls.right).toFloat())
             controls.translationY = controls.translationY.coerceIn(-controls.top.toFloat(), (root.height - controls.bottom).toFloat())
-            if (r - l != or_ - ol || b - t != ob - ot) main.postDelayed({ view("{}") }, 800)
+            if (r - l != or_ - ol || b - t != ob - ot) main.post { setView(viewZ, viewX, viewY) }
         }
         dragOrTap(menu) { showMenu() }
         dragOrTap(zoom) { adjust(!adjusting) }
@@ -398,11 +398,11 @@ window.__wadView = window.__wadView || (function () {
                     return true
                 }
             }
-            if (video != null) {
-                // See-through: the phone's video is under it.
-                setBackgroundColor(Color.TRANSPARENT)
-                WebViewCompat.addWebMessageListener(this, "wadVideo", setOf("https://$host")) { _, message, _, _, _ ->
-                    onVideoMessage(message)
+            // See-through: the phone's video is under it.
+            if (video != null) setBackgroundColor(Color.TRANSPARENT)
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                WebViewCompat.addWebMessageListener(this, "wadPage", setOf("https://$host")) { _, message, _, _, _ ->
+                    onPageMessage(message)
                 }
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -457,12 +457,16 @@ window.__wadView = window.__wadView || (function () {
             WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
             WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)
 
-    /** The page's messages about its video: chunks (binary, a key flag first), its decoder's set-up, and where it's shown. */
-    private fun onVideoMessage(message: WebMessageCompat) {
-        val v = video ?: return
+    /**
+     * The page's messages: video chunks (binary, a key flag first) and its
+     * decoder's set-up, for the phone's decoder; and where the stream sits
+     * unzoomed, for the view.
+     */
+    private fun onPageMessage(message: WebMessageCompat) {
+        val v = video
         if (message.type == WebMessageCompat.TYPE_ARRAY_BUFFER) {
             val b = message.arrayBuffer
-            if (b.size > 1) v.chunk(b[0].toInt() == 1, b.copyOfRange(1, b.size))
+            if (v != null && b.size > 1) v.chunk(b[0].toInt() == 1, b.copyOfRange(1, b.size))
             return
         }
         val m = try {
@@ -471,22 +475,27 @@ window.__wadView = window.__wadView || (function () {
             return
         }
         when (m.optString("type")) {
-            "configure" -> v.configure(
+            "configure" -> v?.configure(
                 m.optInt("width"),
                 m.optInt("height"),
                 m.optString("description").takeIf { it.isNotEmpty() && it != "null" }?.let { Base64.decode(it, Base64.DEFAULT) },
             )
-            "reset" -> v.reset()
+            "reset" -> v?.reset()
             "box" -> {
-                videoBox = floatArrayOf(m.optDouble("x").toFloat(), m.optDouble("y").toFloat(), m.optDouble("w").toFloat(), m.optDouble("h").toFloat())
-                placeVideo()
+                baseBox = floatArrayOf(m.optDouble("x").toFloat(), m.optDouble("y").toFloat(), m.optDouble("w").toFloat(), m.optDouble("h").toFloat())
+                setView(viewZ, viewX, viewY)
             }
         }
     }
 
-    /** The phone's video laid where the page shows the stream. */
+    /**
+     * The phone's video laid where the page shows the stream: sized to it
+     * unzoomed (a change of layout only when that changes), then scaled and
+     * moved by the view, which the screen's compositor does as it draws.
+     */
     private fun placeVideo() {
-        val b = videoBox ?: return
+        if (video == null) return
+        val b = baseBox ?: return
         val d = resources.displayMetrics.density
         val lp = videoView.layoutParams as FrameLayout.LayoutParams
         val w = max(1, (b[2] * d).roundToInt())
@@ -496,17 +505,39 @@ window.__wadView = window.__wadView || (function () {
             lp.height = h
             videoView.layoutParams = lp
         }
-        videoView.translationX = b[0] * d
-        videoView.translationY = b[1] * d
-        val e = dp(1)
-        val elp = videoEdge.layoutParams as FrameLayout.LayoutParams
-        if (elp.width != w + 2 * e || elp.height != h + 2 * e) {
-            elp.width = w + 2 * e
-            elp.height = h + 2 * e
-            videoEdge.layoutParams = elp
+        val left = (viewX + b[0] * viewZ) * d
+        val top = (viewY + b[1] * viewZ) * d
+        videoView.pivotX = 0f
+        videoView.pivotY = 0f
+        videoView.scaleX = viewZ
+        videoView.scaleY = viewZ
+        videoView.translationX = left
+        videoView.translationY = top
+        videoEdge.around(left, top, w * viewZ, h * viewZ)
+    }
+
+    /** The stream's edge, drawn a pixel outside it on the background (no layout as the view moves). */
+    private inner class Edge : View(this@StreamActivity) {
+        private val paint = android.graphics.Paint().apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = dp(1).toFloat()
         }
-        videoEdge.translationX = b[0] * d - e
-        videoEdge.translationY = b[1] * d - e
+        private val box = android.graphics.RectF()
+
+        fun around(left: Float, top: Float, width: Float, height: Float) {
+            val e = paint.strokeWidth / 2
+            box.set(left - e, top - e, left + width + e, top + height + e)
+            invalidate()
+        }
+
+        fun color(c: Int) {
+            paint.color = c
+            invalidate()
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            if (!box.isEmpty) canvas.drawRect(box, paint)
+        }
     }
 
     private fun night() =
@@ -522,7 +553,7 @@ window.__wadView = window.__wadView || (function () {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         root.setBackgroundColor(pasteboard())
-        if (video != null) (videoEdge.background as GradientDrawable).setStroke(dp(1), edge())
+        if (video != null) videoEdge.color(edge())
     }
 
     /** A keyframe from the machine (the phone's decoder starts or catches up on one). */
@@ -598,30 +629,25 @@ window.__wadView = window.__wadView || (function () {
         }
     }
 
-    /** While adjusting: one finger or two move the view, a pinch zooms it about its middle, a double tap fits it. */
+    /**
+     * While adjusting: the fingers hold the stream where they touch it, so
+     * one moves it and two pinch it (the point between them stays under
+     * them, out to the last bit of the pinch); a double tap fits it.
+     */
     @SuppressLint("ClickableViewAccessibility")
     private fun viewGestures() {
-        val pinch = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScale(d: ScaleGestureDetector): Boolean {
-                pendingF *= d.scaleFactor
-                pendingX = d.focusX
-                pendingY = d.focusY
-                flushSoon()
-                return true
-            }
-        })
         val taps = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                view("{reset:true}")
+                setView(1f, 0f, 0f)
                 return true
             }
         })
         var lastX = 0f
         var lastY = 0f
+        var lastSpan = 0f
         adjustLayer.setOnTouchListener { _, e ->
-            pinch.onTouchEvent(e)
             taps.onTouchEvent(e)
-            // The fingers' middle, leaving out one being lifted.
+            // The fingers' middle and spread, leaving out one being lifted.
             val lifted = if (e.actionMasked == MotionEvent.ACTION_POINTER_UP) e.actionIndex else -1
             var x = 0f
             var y = 0f
@@ -632,44 +658,62 @@ window.__wadView = window.__wadView || (function () {
                 y += e.getY(i)
                 n++
             }
-            if (n > 0) {
-                x /= n
-                y /= n
+            if (n == 0) return@setOnTouchListener true
+            x /= n
+            y /= n
+            var span = 0f
+            if (n >= 2) {
+                for (i in 0 until e.pointerCount) {
+                    if (i == lifted) continue
+                    span += kotlin.math.hypot(e.getX(i) - x, e.getY(i) - y)
+                }
+                span /= n
             }
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
                     lastX = x
                     lastY = y
+                    lastSpan = span
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    pendingDx += x - lastX
-                    pendingDy += y - lastY
+                    val d = resources.displayMetrics.density
+                    val f = if (span > 0f && lastSpan > 0f) span / lastSpan else 1f
+                    val z = (viewZ * f).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                    val k = z / viewZ
+                    // The stream's point under the fingers' old middle, under their new middle.
+                    setView(z, x / d - (lastX / d - viewX) * k, y / d - (lastY / d - viewY) * k)
                     lastX = x
                     lastY = y
-                    flushSoon()
+                    lastSpan = span
                 }
             }
             true
         }
     }
 
-    /** The pan and zoom so far, to the page on the next frame (screen pixels to CSS pixels). */
-    private fun flushSoon() {
-        if (flushing) return
-        flushing = true
-        root.postOnAnimation {
-            flushing = false
+    /**
+     * The view zoomed and moved (CSS pixels), a corner of the stream (64 px,
+     * or half of it) kept in sight: the phone's video at once, the page's
+     * container on the next frame.
+     */
+    private fun setView(z: Float, x: Float, y: Float) {
+        viewZ = z.coerceIn(MIN_ZOOM, MAX_ZOOM)
+        viewX = x
+        viewY = y
+        baseBox?.let { b ->
             val d = resources.displayMetrics.density
-            val about = if (pendingF != 1f) "f:$pendingF,x:${pendingX / d},y:${pendingY / d}," else ""
-            view("{${about}dx:${pendingDx / d},dy:${pendingDy / d}}")
-            pendingF = 1f
-            pendingDx = 0f
-            pendingDy = 0f
+            val keepX = min(KEEP, b[2] * viewZ / 2)
+            val keepY = min(KEEP, b[3] * viewZ / 2)
+            viewX = viewX.coerceIn(keepX - (b[0] + b[2]) * viewZ, root.width / d - keepX - b[0] * viewZ)
+            viewY = viewY.coerceIn(keepY - (b[1] + b[3]) * viewZ, root.height / d - keepY - b[1] * viewZ)
         }
-    }
-
-    private fun view(cmd: String) {
-        web?.evaluateJavascript("window.__wadView&&window.__wadView($cmd)", null)
+        placeVideo()
+        if (syncing) return
+        syncing = true
+        root.postOnAnimation {
+            syncing = false
+            web?.evaluateJavascript("window.__wadView&&window.__wadView($viewZ,$viewX,$viewY)", null)
+        }
     }
 
     /** The page again, in a new WebView (after its process stopped, or from Refresh). */
@@ -680,6 +724,11 @@ window.__wadView = window.__wadView || (function () {
             it.destroy()
         }
         video?.reset()
+        // A new page starts unzoomed.
+        viewZ = 1f
+        viewX = 0f
+        viewY = 0f
+        baseBox = null
         // Above the phone's video, if there is one.
         val at = if (video != null) root.indexOfChild(videoView) + 1 else 0
         root.addView(makeWeb(), at, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
