@@ -27,11 +27,13 @@ class RemoteWaddTest {
         val now = 1_800_000_000_000
         val hb = json.parseToJsonElement(
             """{"id": "m1", "name": "Surface", "lastSeen": "${io.wadspaces.core.firebase.Values.rfc3339(now - 20_000)}",
-                "tailnet": {"state": "running", "ips": ["fd7a:115c:a1e0::a01:2b03", "100.101.102.103"], "port": 8087, "listening": true}}""",
+                "tailnet": {"state": "running", "ips": ["fd7a:115c:a1e0::a01:2b03", "100.101.102.103"], "port": 8087, "listening": true},
+                "images": [{"layer": "template:dev", "id": "a"}, {"layer": "base", "id": "b"}]}""",
         ).jsonObject
         val m = Machine.of(hb, now)
         assertEquals(Triple("Surface", true, "running"), Triple(m.name, m.online, m.tailnet))
         assertEquals(Target("100.101.102.103", 8087), m.target)
+        assertEquals(setOf("template:dev", "base"), m.layers)
         assertEquals("http://[fd7a:115c:a1e0::1]:8087", Target("fd7a:115c:a1e0::1", 8087).base)
         val off = Machine.of(json.parseToJsonElement("""{"id": "m2", "hostname": "desk", "lastSeen": "2020-01-01T00:00:00Z"}""").jsonObject, now)
         assertEquals(Triple("desk", false, "off"), Triple(off.name, off.online, off.tailnet))

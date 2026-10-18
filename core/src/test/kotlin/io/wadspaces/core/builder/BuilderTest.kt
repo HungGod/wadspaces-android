@@ -91,5 +91,41 @@ class BuilderTest {
         assertEquals("m2r1bz7k", Builder.uid("stack", 1_730_000_000_000).split('-')[1])
     }
 
+    @Test
+    fun onlyTemplatesBuiltOnTheMachineAndYourSetups() {
+        fun obj(s: String) = json.parseToJsonElement(s).jsonObject
+        val lib = io.wadspaces.core.library.Library(
+            templates = listOf(
+                dev,
+                obj("""{"id": "writing", "name": "Writing", "apps": ["obsidian"]}"""),
+                obj("""{"id": "old", "name": "Old", "apps": ["android-studio", "chrome"]}"""),
+                obj("""{"id": "gone", "name": "Gone", "apps": ["vscode"], "deletedAt": "2026-10-01T00:00:00Z"}"""),
+            ),
+            extensions = listOf(
+                obj("""{"id": "vanua-dev", "name": "VanuaAcademy Dev", "templateId": "dev", "browserMode": "browser",
+                        "webapps": [{"id": "github", "name": "GitHub", "url": "https://github.com"}], "extensions": ["anthropic.claude-code"], "tools": ["firebase"]}"""),
+                obj("""{"id": "notes", "name": "Notes tools", "templateId": "writing", "browserMode": "focus", "webapps": [], "extensions": [], "tools": ["python"]}"""),
+            ),
+            wadspaces = listOf(obj("""{"id": "va", "order": 1, "template": "dev", "extensions": "vanua-dev", "customization": {"name": "VanuaAcademy"}}""")),
+        )
+        // What the machine's heartbeat says is built there (the old one isn't, nor the deleted one).
+        val on = Builder.templatesOn(lib, setOf("template:dev", "template:writing", "template:gone", "custom:vanua-dev", "base"))
+        assertEquals(listOf("dev", "writing"), on.map { it.str("id") })
+
+        val setups = Builder.setups(lib, templateId = "writing")
+        assertEquals(listOf("notes", "vanua-dev"), setups.map { it.id }, "this template's first")
+        val vanua = setups.first { it.id == "vanua-dev" }
+        assertEquals(listOf("VanuaAcademy"), vanua.usedBy)
+        // On its own template: as it is.
+        assertEquals(ExtensionsPick.Yours("vanua-dev"), Builder.pickFrom(vanua, "dev", listOf("wadbrowser", "vscode")))
+        // On another: copied, keeping what fits.
+        val onWriting = Builder.pickFrom(vanua, "writing", listOf("obsidian")) as ExtensionsPick.New
+        assertEquals(Triple(emptyList<WebApp>(), emptyList<String>(), listOf("firebase")), Triple(onWriting.webapps, onWriting.extensions, onWriting.tools))
+        assertEquals(listOf("web apps", "VS Code extensions"), Builder.leftOut(vanua, listOf("obsidian")))
+        val onBrowser = Builder.copyOnto(vanua, listOf("wadbrowser"))
+        assertEquals(listOf("github"), onBrowser.webapps.map { it.id })
+        assertEquals(emptyList(), Builder.leftOut(vanua, listOf("wadbrowser", "vscode")))
+    }
+
     private fun catalogPreset() = json.parseToJsonElement("""{"type": "gradient", "value": "linear-gradient(180deg, #0a0614, #142640)"}""").jsonObject
 }

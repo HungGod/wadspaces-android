@@ -74,6 +74,8 @@ data class Machine(
     /** "running", "needsLogin", ... ("off" or none: not on the tailnet). */
     val tailnet: String,
     val target: Target?,
+    /** The layers built there ("template:<id>", "custom:<id>"), as its heartbeat lists its images. */
+    val layers: Set<String> = emptySet(),
 ) {
     companion object {
         /** Heartbeats within this long: online (the client's ONLINE_WITHIN). */
@@ -91,6 +93,7 @@ data class Machine(
                 online = seen > 0 && now - seen < ONLINE_WITHIN_MS,
                 tailnet = t.str("state").ifEmpty { "off" },
                 target = ip?.takeIf { t.str("state") == "running" }?.let { Target(it, port) },
+                layers = (heartbeat["images"] as? JsonArray)?.map { it.str("layer") }?.filter { it.isNotEmpty() }?.toSet() ?: emptySet(),
             )
         }
     }

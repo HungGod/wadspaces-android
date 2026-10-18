@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import io.wadspaces.android.AppModel
 import io.wadspaces.android.MachineView
 import kotlinx.coroutines.delay
@@ -43,11 +46,14 @@ fun MachinesScreen(model: AppModel) {
     var code by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    // The heartbeats again every 30 s while this shows.
+    // The heartbeats again every 30 s while this shows (and the app's in front).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(Unit) {
-        while (true) {
-            model.refreshMachines()
-            delay(30_000)
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                model.refreshMachines()
+                delay(30_000)
+            }
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {

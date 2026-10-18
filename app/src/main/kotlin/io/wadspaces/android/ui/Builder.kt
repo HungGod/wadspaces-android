@@ -27,9 +27,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,71 +43,106 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.wadspaces.android.AppModel
 import io.wadspaces.android.LibState
+import io.wadspaces.android.MachineView
 import io.wadspaces.core.board.Layers
 import io.wadspaces.core.board.Sync
 import io.wadspaces.core.builder.Builder
+import io.wadspaces.core.builder.Catalog
 import io.wadspaces.core.builder.Customization
 import io.wadspaces.core.builder.ExtensionsPick
+import io.wadspaces.core.builder.Setup
 import io.wadspaces.core.builder.TemplatePick
 import io.wadspaces.core.builder.WebApp
 import io.wadspaces.core.library.Library
-import io.wadspaces.core.library.alive
 import io.wadspaces.core.str
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 
 private val STEPS = listOf("Template", "Extensions", "Look", "Review")
 
-/** The template's apps, whichever way it's picked (null: it's gone). */
-private fun appsOf(t: TemplatePick, lib: Library): List<String>? = when (t) {
-    is TemplatePick.Yours -> Layers.chainOf(lib.lib(), t.id).lastOrNull()?.let { strings(it["apps"]) }
-    is TemplatePick.FromStarter -> t.starter.apps
-    is TemplatePick.New -> t.apps
+private fun strings(v: JsonElement?) = (v as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content } ?: emptyList()
+
+/** The template picked: its id and its apps (none picked: null). */
+private fun topOf(t: TemplatePick?, lib: Library): Pair<String, List<String>>? {
+    val id = (t as? TemplatePick.Yours)?.id ?: return null
+    val top = Layers.chainOf(lib.lib(), id).lastOrNull() ?: return null
+    return top.str("id") to strings(top["apps"])
 }
 
-private fun strings(v: kotlinx.serialization.json.JsonElement?) = (v as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content } ?: emptyList()
+/** A setup's contents, in a line: its web apps, VS Code extensions and tools by name. */
+private fun contents(s: Setup, catalog: Catalog): String {
+    val parts = listOfNotNull(
+        s.webapps.takeIf { it.isNotEmpty() }?.let { "WadBrowser: " + it.joinToString(", ") { w -> w.name } },
+        "Focus".takeIf { s.focus && s.webapps.isEmpty() },
+        s.extensions.takeIf { it.isNotEmpty() }?.let { "VS Code: " + it.joinToString(", ") { x -> catalog.extensions.firstOrNull { e -> e.id == x }?.name ?: x } },
+        s.tools.takeIf { it.isNotEmpty() }?.let { "Tools: " + it.joinToString(", ") { x -> catalog.tools.firstOrNull { t -> t.id == x }?.name ?: x } },
+    )
+    return parts.joinToString(" · ").ifEmpty { "Nothing set up" }
+}
 
 /**
- * The phone's builder: one new wadspace, a step at a time. Its template
- * (yours, a starter, or new from catalog apps), its Extensions (none, yours,
- * or new), its look and projects; saved as the board would save it.
+ * The phone's builder: one new wadspace, a step at a time, for one of your
+ * machines. Its template is one already built there; its Extensions none,
+ * one of your setups (as it is, or copied onto this template), or set up
+ * by hand; then its look and projects. Saved as the board would save it,
+ * then built on that machine.
  */
 @Composable
-fun BuilderScreen(model: AppModel, saved: (String) -> Unit) {
+fun BuilderScreen(model: AppModel, saved: (id: String, machine: String?) -> Unit) {
     val state by model.library.collectAsState()
+    val machines by model.machines.collectAsState()
     val lib = (state as? LibState.Ready)?.lib ?: return Centered("Your library isn't here yet.")
     val catalog = model.g.catalog
     var step by remember { mutableStateOf(0) }
-    var template by remember { mutableStateOf<TemplatePick>(TemplatePick.FromStarter(catalog.starters.first())) }
+    // Machines whose heartbeat lists their images; the ones that trust this phone first.
+    val targets = machines.filter { it.machine.layers.isNotEmpty() }.sortedBy { !it.ready }
+    var machineId by remember { mutableStateOf<String?>(null) }
+    val target: MachineView? = targets.firstOrNull { it.machine.id == machineId } ?: targets.firstOrNull()
+    var template by remember { mutableStateOf<TemplatePick?>(null) }
     var extensions by remember { mutableStateOf<ExtensionsPick>(ExtensionsPick.None) }
+    // Which of your setups it came from ("hand": set up by hand).
+    var source by remember { mutableStateOf<String?>(null) }
     var look by remember { mutableStateOf(Customization("", wallpaper = catalog.presets.getOrNull(1)?.wallpaper ?: Sync.blankWallpaper())) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val problems = Builder.problems(template, extensions, look, lib.lib(), catalog)
+    val problems = template?.let { Builder.problems(it, extensions, look, lib.lib(), catalog) } ?: listOf("Pick a template.")
+    val canNext = when (step) {
+        0 -> template != null
+        else -> true
+    }
 
     Column(Modifier.fillMaxSize()) {
         PageHead("New wadspace", "Step ${step + 1} of 4: ${STEPS[step]}")
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             STEPS.indices.forEach { i ->
-                val on = i <= step
                 Card(
                     Modifier.weight(1f).height(4.dp),
                     shape = RoundedCornerShape(2.dp),
-                    colors = CardDefaults.cardColors(containerColor = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant),
+                    colors = CardDefaults.cardColors(containerColor = if (i <= step) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant),
                 ) {}
             }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp)) {
             when (step) {
-                0 -> TemplateStep(model, lib, template) {
+                0 -> TemplateStep(model, lib, targets, target, template, pickMachine = {
+                    machineId = it
+                    template = null
+                    extensions = ExtensionsPick.None
+                    source = null
+                }) {
                     template = it
                     extensions = ExtensionsPick.None
+                    source = null
                 }
-                1 -> ExtensionsStep(model, lib, template, extensions) { extensions = it }
+                1 -> ExtensionsStep(model, lib, template, extensions, source) { pick, from ->
+                    extensions = pick
+                    source = from
+                }
                 2 -> LookStep(model, lib, look) { look = it }
-                else -> ReviewStep(model, lib, template, extensions, look, problems)
+                else -> ReviewStep(model, lib, template, extensions, look, problems, target)
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp)) }
         }
@@ -118,22 +150,24 @@ fun BuilderScreen(model: AppModel, saved: (String) -> Unit) {
             if (step > 0) TextButton(onClick = { step-- }) { Text("Back") }
             Spacer(Modifier.weight(1f))
             if (step < 3) {
-                Button(onClick = { step++ }) { Text("Next") }
+                Button(enabled = canNext, onClick = { step++ }) { Text("Next") }
             } else if (saving) {
                 CircularProgressIndicator()
             } else {
+                val build = target?.takeIf { it.ready && it.machine.online }
                 Button(enabled = problems.isEmpty(), onClick = {
                     error = null
                     saving = true
                     scope.launch {
                         try {
-                            saved(model.save(template, extensions, look))
+                            val id = model.save(template!!, extensions, look)
+                            saved(id, build?.machine?.id)
                         } catch (e: Exception) {
                             error = e.message ?: "Couldn't save it."
                         }
                         saving = false
                     }
-                }) { Text("Save") }
+                }) { Text(if (build != null) "Save and build on ${build.machine.name}" else "Save") }
             }
         }
     }
@@ -146,7 +180,7 @@ private fun Section(title: String, sub: String? = null) {
 }
 
 @Composable
-private fun Choice(selected: Boolean, title: String, sub: String, onClick: () -> Unit) {
+private fun Choice(selected: Boolean, title: String, sub: String, note: String? = null, onClick: () -> Unit) {
     Card(
         Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
@@ -157,117 +191,97 @@ private fun Choice(selected: Boolean, title: String, sub: String, onClick: () ->
             Column(Modifier.padding(start = 4.dp)) {
                 Text(title, fontWeight = FontWeight.SemiBold)
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
             }
-        }
-    }
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun <T> Tabs(options: List<Pair<T, String>>, picked: T, pick: (T) -> Unit) {
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-        options.forEachIndexed { i, (v, label) ->
-            SegmentedButton(picked == v, { pick(v) }, SegmentedButtonDefaults.itemShape(i, options.size)) { Text(label) }
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TemplateStep(model: AppModel, lib: Library, picked: TemplatePick, pick: (TemplatePick) -> Unit) {
+private fun TemplateStep(
+    model: AppModel,
+    lib: Library,
+    targets: List<MachineView>,
+    target: MachineView?,
+    picked: TemplatePick?,
+    pickMachine: (String) -> Unit,
+    pick: (TemplatePick) -> Unit,
+) {
     val catalog = model.g.catalog
-    val yours = lib.templates.filter(::alive)
-    val kind = when (picked) {
-        is TemplatePick.Yours -> "yours"
-        is TemplatePick.FromStarter -> "starter"
-        is TemplatePick.New -> "new"
+    if (target == null) {
+        Text(
+            "None of your machines has anything built yet. Build a wadspace on one from WadSpaces there first: its templates are what this builds on.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
     }
-    Text("The apps it has.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Spacer(Modifier.height(12.dp))
-    Tabs(listOf("yours" to "Yours", "starter" to "Starters", "new" to "New"), kind) {
-        pick(
-            when (it) {
-                "yours" -> yours.firstOrNull()?.let { t -> TemplatePick.Yours(t.str("id")) } ?: picked
-                "starter" -> TemplatePick.FromStarter(catalog.starters.first())
-                else -> TemplatePick.New("", emptyList())
-            },
+    Text("For", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        targets.forEach { v -> FilterChip(v.machine.id == target.machine.id, { pickMachine(v.machine.id) }, { Text(v.machine.name) }) }
+    }
+    if (!target.ready) {
+        Text(
+            "${target.machine.name} doesn't trust this phone yet: you can save it now and build it there later.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    Spacer(Modifier.height(8.dp))
-    when (picked) {
-        is TemplatePick.Yours -> yours.forEach { t ->
-            Choice(picked.id == t.str("id"), t.str("name"), catalog.appNames(strings(t["apps"]))) { pick(TemplatePick.Yours(t.str("id"))) }
-        }
-        is TemplatePick.FromStarter -> catalog.starters.forEach { s ->
-            Choice(picked.starter.id == s.id, s.name, s.description) { pick(TemplatePick.FromStarter(s)) }
-        }
-        is TemplatePick.New -> {
-            OutlinedTextField(picked.name, { pick(picked.copy(name = it)) }, Modifier.fillMaxWidth(), label = { Text("Its name") }, singleLine = true)
-            Section("Builds on", "One of yours whose apps it all has, or nothing.")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(picked.parent == null, { pick(picked.copy(parent = null)) }, { Text("Nothing") })
-                yours.forEach { t ->
-                    FilterChip(picked.parent == t.str("id"), {
-                        val apps = (picked.apps + strings(t["apps"])).distinct()
-                        pick(picked.copy(parent = t.str("id"), apps = apps))
-                    }, { Text(t.str("name")) })
-                }
-            }
-            Section("Apps")
-            catalog.apps.forEach { a ->
-                Row(Modifier.fillMaxWidth().clickable {
-                    pick(picked.copy(apps = if (a.id in picked.apps) picked.apps - a.id else picked.apps + a.id))
-                }, verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(a.id in picked.apps, null)
-                    Column(Modifier.padding(start = 8.dp, top = 6.dp, bottom = 6.dp)) {
-                        Text(a.name)
-                        Text(a.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
+    Section("Template", "The ones built on ${target.machine.name}: their apps are what it has.")
+    val built = Builder.templatesOn(lib, target.machine.layers)
+    if (built.isEmpty()) {
+        Text("Nothing of yours is built on ${target.machine.name} yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    built.forEach { t ->
+        val id = t.str("id")
+        Choice((picked as? TemplatePick.Yours)?.id == id, t.str("name"), catalog.appNames(strings(t["apps"]))) { pick(TemplatePick.Yours(id)) }
     }
 }
 
 @Composable
-private fun ExtensionsStep(model: AppModel, lib: Library, template: TemplatePick, picked: ExtensionsPick, pick: (ExtensionsPick) -> Unit) {
+private fun ExtensionsStep(
+    model: AppModel,
+    lib: Library,
+    template: TemplatePick?,
+    picked: ExtensionsPick,
+    source: String?,
+    pick: (ExtensionsPick, String?) -> Unit,
+) {
     val catalog = model.g.catalog
-    val apps = appsOf(template, lib) ?: emptyList()
-    // Extensions of yours made on this very template (an existing one only).
-    val top = (template as? TemplatePick.Yours)?.let { Layers.chainOf(lib.lib(), it.id).lastOrNull()?.str("id") }
-    val yours = lib.allExtensions.filter { alive(it) && top != null && it.str("templateId") == top }
-    val kind = when (picked) {
-        ExtensionsPick.None -> "none"
-        is ExtensionsPick.Yours -> "yours"
-        is ExtensionsPick.New -> "new"
-    }
-    Text("How its apps are set up: WadBrowser's web apps, VS Code's extensions, command-line tools. Optional.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Spacer(Modifier.height(12.dp))
-    val options = listOfNotNull("none" to "None", ("yours" to "Yours").takeIf { yours.isNotEmpty() }, "new" to "New")
-    Tabs(options, kind) {
-        pick(
-            when (it) {
-                "yours" -> ExtensionsPick.Yours(yours.first().str("id"))
-                "new" -> ExtensionsPick.New("")
-                else -> ExtensionsPick.None
-            },
-        )
-    }
+    val (tid, apps) = topOf(template, lib) ?: return Text("Pick a template first.")
+    val setups = Builder.setups(lib, tid).filterNot { it.empty }
+    Text("How its apps are set up: WadBrowser's web apps, VS Code's extensions, command-line tools.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     Spacer(Modifier.height(8.dp))
-    when (picked) {
-        ExtensionsPick.None -> Text("The apps as they come.", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        is ExtensionsPick.Yours -> yours.forEach { e ->
-            val what = "${(e["webapps"] as? JsonArray)?.size ?: 0} web apps · " +
-                "${strings(e["extensions"]).size} extensions · ${strings(e["tools"]).size} tools"
-            Choice(picked.id == e.str("id"), e.str("name"), what) { pick(ExtensionsPick.Yours(e.str("id"))) }
+    Choice(picked == ExtensionsPick.None, "None", "The apps as they come.") { pick(ExtensionsPick.None, null) }
+    if (setups.isNotEmpty()) Section("From your wadspaces")
+    setups.forEach { s ->
+        val left = Builder.leftOut(s, apps)
+        val note = when {
+            s.templateId == tid -> "Made for this template: used as it is"
+            left.isNotEmpty() -> "Copied onto this template, without its ${left.joinToString(" and ")}"
+            else -> "Copied onto this template"
         }
-        is ExtensionsPick.New -> NewExtensions(model, apps, picked, pick)
+        val used = if (s.usedBy.isEmpty()) "" else "Used by ${s.usedBy.joinToString(", ")} · "
+        Choice(source == s.id, s.name, used + contents(s, catalog), note) { pick(Builder.pickFrom(s, tid, apps), s.id) }
+    }
+    Section("Or")
+    Choice(source == "hand", "Set up by hand", "Pick web apps, extensions and tools yourself.") { pick(ExtensionsPick.New(""), "hand") }
+    when (picked) {
+        is ExtensionsPick.Yours -> TextButton(onClick = {
+            val s = setups.firstOrNull { it.id == picked.id } ?: return@TextButton
+            pick(Builder.copyOnto(s, apps), "hand")
+        }) { Text("Change a copy of it") }
+        is ExtensionsPick.New -> {
+            Spacer(Modifier.height(8.dp))
+            NewExtensions(model, apps, setups, picked) { pick(it, source ?: "hand") }
+        }
+        ExtensionsPick.None -> {}
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NewExtensions(model: AppModel, apps: List<String>, e: ExtensionsPick.New, pick: (ExtensionsPick) -> Unit) {
+private fun NewExtensions(model: AppModel, apps: List<String>, setups: List<Setup>, e: ExtensionsPick.New, pick: (ExtensionsPick.New) -> Unit) {
     val catalog = model.g.catalog
     OutlinedTextField(e.name, { pick(e.copy(name = it)) }, Modifier.fillMaxWidth(), label = { Text("Its name") }, singleLine = true)
     if ("wadbrowser" in apps) {
@@ -275,6 +289,16 @@ private fun NewExtensions(model: AppModel, apps: List<String>, e: ExtensionsPick
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Focus (no address bar)", Modifier.weight(1f))
             Switch(e.focus, { pick(e.copy(focus = it)) })
+        }
+        val withApps = setups.filter { it.webapps.isNotEmpty() }
+        if (withApps.isNotEmpty()) {
+            Text("Add the web apps of:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                withApps.forEach { s ->
+                    val all = s.webapps.all { w -> e.webapps.any { it.id == w.id } }
+                    FilterChip(all, { pick(e.copy(webapps = (e.webapps + s.webapps).distinctBy { it.id })) }, { Text(s.name) })
+                }
+            }
         }
         e.webapps.forEach { w ->
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -302,6 +326,15 @@ private fun NewExtensions(model: AppModel, apps: List<String>, e: ExtensionsPick
     }
     if ("vscode" in apps) {
         Section("VS Code extensions")
+        val withExt = setups.filter { it.extensions.isNotEmpty() }
+        if (withExt.isNotEmpty()) {
+            Text("Add the extensions of:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                withExt.forEach { s ->
+                    FilterChip(e.extensions.containsAll(s.extensions), { pick(e.copy(extensions = (e.extensions + s.extensions).distinct())) }, { Text(s.name) })
+                }
+            }
+        }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             catalog.extensions.forEach { x ->
                 FilterChip(x.id in e.extensions, {
@@ -311,6 +344,15 @@ private fun NewExtensions(model: AppModel, apps: List<String>, e: ExtensionsPick
         }
     }
     Section("Tools", "Command-line kits.")
+    val withTools = setups.filter { it.tools.isNotEmpty() }
+    if (withTools.isNotEmpty()) {
+        Text("Add the tools of:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            withTools.forEach { s ->
+                FilterChip(e.tools.containsAll(s.tools), { pick(e.copy(tools = (e.tools + s.tools).distinct())) }, { Text(s.name) })
+            }
+        }
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         catalog.tools.forEach { x ->
             FilterChip(x.id in e.tools, { pick(e.copy(tools = if (x.id in e.tools) e.tools - x.id else e.tools + x.id)) }, { Text(x.name) })
@@ -357,30 +399,36 @@ private fun LookStep(model: AppModel, lib: Library, c: Customization, pick: (Cus
 }
 
 @Composable
-private fun ReviewStep(model: AppModel, lib: Library, t: TemplatePick, e: ExtensionsPick, c: Customization, problems: List<String>) {
+private fun ReviewStep(
+    model: AppModel,
+    lib: Library,
+    t: TemplatePick?,
+    e: ExtensionsPick,
+    c: Customization,
+    problems: List<String>,
+    target: MachineView?,
+) {
     val catalog = model.g.catalog
     Wallpaper(c.wallpaper, catalog, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
     Spacer(Modifier.height(12.dp))
     Text(c.name.ifBlank { "Untitled" }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
     if (c.description.isNotBlank()) Text(c.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Spacer(Modifier.height(8.dp))
-    val tname = when (t) {
-        is TemplatePick.Yours -> Layers.chainOf(lib.lib(), t.id).lastOrNull()?.str("name") ?: "?"
-        is TemplatePick.FromStarter -> t.starter.name
-        is TemplatePick.New -> t.name.ifBlank { "New template" }
-    }
-    Fact("Template", "$tname: ${catalog.appNames(appsOf(t, lib) ?: emptyList())}")
+    val top = (t as? TemplatePick.Yours)?.let { Layers.chainOf(lib.lib(), it.id).lastOrNull() }
+    Fact("Template", top?.let { "${it.str("name")}: ${catalog.appNames(strings(it["apps"]))}" } ?: "None")
     Fact("Extensions", when (e) {
         ExtensionsPick.None -> "None"
         is ExtensionsPick.Yours -> lib.allExtensions.firstOrNull { it.str("id") == e.id }?.str("name") ?: "?"
         is ExtensionsPick.New -> "${e.name.ifBlank { "New" }}: ${e.webapps.size} web apps, ${e.extensions.size} extensions, ${e.tools.size} tools"
     })
     Fact("Projects", c.projects.joinToString(", ") { it.repo }.ifEmpty { "None" })
+    target?.let { Fact("For", it.machine.name) }
+    Spacer(Modifier.height(12.dp))
     if (problems.isNotEmpty()) {
-        Spacer(Modifier.height(12.dp))
         problems.forEach { Text("• $it", color = MaterialTheme.colorScheme.error) }
+    } else if (target?.ready == true && target.machine.online) {
+        Text("Saved to your account, then built on ${target.machine.name}.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     } else {
-        Spacer(Modifier.height(12.dp))
-        Text("Saved to your account. Then build it on one of your machines.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Saved to your account; build it once a machine trusts this phone.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

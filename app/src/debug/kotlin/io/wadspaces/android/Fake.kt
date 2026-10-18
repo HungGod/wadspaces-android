@@ -36,6 +36,7 @@ object Fake {
 private class FakeServer : Http {
     private val docs = linkedMapOf<String, JsonObject>()
     private var polls = 0
+    private val streamed = mutableSetOf<String>()
     private val surface = "100.101.102.103"
 
     init {
@@ -51,7 +52,7 @@ private class FakeServer : Http {
         put("wadspaces/vanua-academy", """{"version": 3, "owner": "fake", "sharedWith": [], "order": 2, "template": "dev", "extensions": "vanua-academy-dev", "customization": {"name": "VanuaAcademy", "description": "Building Vanua Academy.", "wallpaper": {"type": "gradient", "value": "$aurora"}, "projects": [], "secrets": {"bySlot": {}}}, "createdAt": "2026-09-22T00:00:00.000Z", "updatedAt": "2026-09-22T00:00:00.000Z"}""")
         put("users/fake/github/repos", """{"login": "HungGod", "repos": [{"fullName": "HungGod/Writing", "name": "Writing", "private": true, "url": "", "defaultBranch": "main", "description": "Notes and drafts"}, {"fullName": "HungGod/VanuaAcademy", "name": "VanuaAcademy", "private": false, "url": "", "defaultBranch": "main", "description": "The academy's site"}, {"fullName": "HungGod/WadSpaces", "name": "WadSpaces", "private": false, "url": "", "defaultBranch": "main", "description": ""}]}""")
         val now = Values.rfc3339(System.currentTimeMillis())
-        put("users/fake/machines/surface", """{"name": "Surface", "hostname": "wadspaces", "lastSeen": "$now", "tailnet": {"state": "running", "ips": ["$surface", "fd7a:115c:a1e0::a01:2b03"], "dnsName": "wadspaces-surface.tail1234.ts.net", "port": 8087, "listening": true}}""")
+        put("users/fake/machines/surface", """{"name": "Surface", "hostname": "wadspaces", "lastSeen": "$now", "tailnet": {"state": "running", "ips": ["$surface", "fd7a:115c:a1e0::a01:2b03"], "dnsName": "wadspaces-surface.tail1234.ts.net", "port": 8087, "listening": true}, "images": [{"layer": "base"}, {"layer": "template:writing"}, {"layer": "template:dev"}, {"layer": "custom:vanua-academy-dev"}]}""")
         put("users/fake/machines/desk", """{"name": "Desk", "hostname": "desk", "lastSeen": "2026-10-15T08:00:00.000Z"}""")
     }
 
@@ -65,6 +66,8 @@ private class FakeServer : Http {
         val url = r.url
         if (url.contains("/documents")) return firestore(r)
         if (url.startsWith("http://$surface:8087")) return wadd(r, url.substringAfter(":8087").substringBefore('?'))
+        // The made-up stream's link: up, asking for its login.
+        if (url.startsWith("https://wadspaces.com/")) return HttpResponse(401, "")
         return HttpResponse(404, """{"error": {"message": "not in the fake"}}""")
     }
 
@@ -96,7 +99,12 @@ private class FakeServer : Http {
                     put("name", name)
                     put("layer", "template:$id")
                     put("built", id == "cosmic-bodybuilding" || built(id))
-                    put("container", "exited")
+                    put("container", if (id in streamed) "running" else "exited")
+                    if (id in streamed) {
+                        put("streamed", true)
+                        put("live", true)
+                        put("phase", "ready")
+                    }
                 }
             }))
             path.endsWith("/build") -> {
@@ -132,9 +140,16 @@ private class FakeServer : Http {
                     put("lines", JsonArray(lines.map(::JsonPrimitive)))
                 })
             }
-            path.endsWith("/stream") && r.method == "POST" -> ok(json.parseToJsonElement(
-                """{"workspace": "x", "link": "https://wadspaces.com/", "openLink": "https://wadspaces.com/", "user": "wad-fake", "password": "not-real"}""",
-            ))
+            path.endsWith("/stream") && r.method == "POST" -> {
+                streamed += path.removePrefix("/v1/remote/wadspaces/").removeSuffix("/stream")
+                ok(json.parseToJsonElement(
+                    """{"workspace": "x", "link": "https://wadspaces.com/", "openLink": "https://wadspaces.com/", "user": "wad-fake", "password": "not-real"}""",
+                ))
+            }
+            path.endsWith("/stream") && r.method == "DELETE" -> {
+                streamed -= path.removePrefix("/v1/remote/wadspaces/").removeSuffix("/stream")
+                HttpResponse(204, "")
+            }
             else -> HttpResponse(204, "")
         }
     }

@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -46,85 +46,138 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import io.wadspaces.android.AppModel
 import io.wadspaces.android.LibState
 import io.wadspaces.android.StreamActivity
 import io.wadspaces.core.board.Layers
+import io.wadspaces.core.firebase.HttpRequest
 import io.wadspaces.core.get
 import io.wadspaces.core.remote.Machine
 import io.wadspaces.core.remote.RemoteFailure
 import io.wadspaces.core.remote.RemoteWadspace
+import io.wadspaces.core.remote.StreamShare
 import io.wadspaces.core.str
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** The machine says its stream is up: routed, and its sidecar answering. */
+private val RemoteWadspace.streamUp get() = streamed && live && phase == "ready"
+
 /**
  * A wadspace: build it on one of your machines (its log as it goes), open
- * it there, or stream it to this phone.
+ * it there, or stream it to this phone. A stream is started, then opened
+ * only once it's ready end to end: the machine says it's up, and its link
+ * answers from here (its login asked for, not Cloudflare's error page).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun WadspaceScreen(model: AppModel, id: String, back: () -> Unit) {
+fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Boolean, back: () -> Unit) {
     val ctx = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val state by model.library.collectAsState()
     val machines by model.machines.collectAsState()
     val runs by model.runs.collectAsState()
     val lib = (state as? LibState.Ready)?.lib ?: return Centered("Your library isn't here yet.")
     val w = lib.wadspaces.firstOrNull { it.str("id") == id } ?: return Centered("That wadspace is gone.")
     val ready = machines.filter { it.ready && it.machine.online }.map { it.machine }
-    var picked by remember { mutableStateOf<String?>(null) }
+    var picked by remember { mutableStateOf(startOn) }
     val machine: Machine? = ready.firstOrNull { it.id == picked } ?: ready.firstOrNull()
     var here by remember(machine?.id) { mutableStateOf<RemoteWadspace?>(null) }
-    var busy by remember { mutableStateOf<String?>(null) }
+    // The stream: its link (once started or found), and whether it answers from here.
+    var share by remember(machine?.id) { mutableStateOf<StreamShare?>(null) }
+    var starting by remember(machine?.id) { mutableStateOf(false) }
+    var linkOk by remember(machine?.id) { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var takeover by remember { mutableStateOf(false) }
+    var asked by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val run = runs[id]?.takeIf { it.machine == machine?.id }
     val name = w["customization"].str("name").ifEmpty { "Untitled" }
     val notReady = Layers.notReady(w, lib.lib())
+    val streamUp = here?.streamUp == true
+    val openable = streamUp && linkOk && share != null
 
     val stream = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        // Back from the stream: stopped if asked to.
         val m = machine ?: return@rememberLauncherForActivityResult
         if (r.data?.getBooleanExtra(StreamActivity.STOP, false) == true) {
+            share = null
+            linkOk = false
             scope.launch { runCatching { model.g.remote.stopStream(m.target!!, id) } }
+        }
+        if (r.data?.getBooleanExtra(StreamActivity.HOME, false) == true) back()
+    }
+
+    // Built on a machine straight after saving (the builder's "Save and build").
+    LaunchedEffect(machine?.id) {
+        val m = machine ?: return@LaunchedEffect
+        if (buildFirst && !asked && m.id == startOn) {
+            asked = true
+            model.build(id, m)
         }
     }
 
-    // What the machine has of it, read now and every few seconds.
+    // What the machine has of it: every 5 s (2 s while a stream comes up),
+    // only while the app is in front (not while a stream's open over it).
     LaunchedEffect(machine?.id, run?.status) {
         val t = machine?.target ?: return@LaunchedEffect
-        while (true) {
-            here = runCatching { model.g.remote.wadspaces(t).firstOrNull { it.id == id } }.getOrNull()
-            delay(5_000)
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                here = runCatching { model.g.remote.wadspaces(t).firstOrNull { it.id == id } }.getOrNull()
+                val waiting = starting || (here?.streamed == true && !linkOk)
+                if (here?.streamed != true && !starting) {
+                    share = null
+                    linkOk = false
+                }
+                delay(if (waiting) 2_000 else 5_000)
+            }
         }
+    }
+
+    // Up on the machine: its link (a stream from before gives the one it has),
+    // then asked from here until it answers with its login.
+    LaunchedEffect(streamUp, machine?.id) {
+        val t = machine?.target ?: return@LaunchedEffect
+        if (!streamUp) return@LaunchedEffect
+        try {
+            val s = share ?: model.g.remote.stream(t, id, false).also { share = it }
+            for (i in 0 until 60) {
+                val status = runCatching { model.g.http.send(HttpRequest("GET", s.link, timeoutMs = 10_000)).status }.getOrDefault(0)
+                if (status == 401 || status in 200..399) {
+                    linkOk = true
+                    break
+                }
+                delay(2_000)
+            }
+            if (!linkOk) error = "The stream is up on ${machine.name}, but its link doesn't answer from here yet."
+        } catch (e: Exception) {
+            error = e.message
+        }
+        starting = false
     }
 
     fun startStream(take: Boolean) {
         val m = machine ?: return
         val t = m.target ?: return
         error = null
-        busy = "Starting the stream on ${m.name}…"
+        starting = true
+        linkOk = false
         scope.launch {
             try {
-                val share = model.g.remote.stream(t, id, take)
-                // Up once the machine says the stream is live (its sidecar answering).
-                for (i in 0 until 120) {
-                    val now = runCatching { model.g.remote.wadspaces(t).firstOrNull { it.id == id } }.getOrNull()
-                    if (now?.live == true) break
-                    delay(1_000)
+                share = model.g.remote.stream(t, id, take)
+                // Given up after three minutes with nothing.
+                delay(180_000)
+                if (starting) {
+                    starting = false
+                    error = "The stream didn't come up on ${m.name}: try again."
                 }
-                busy = null
-                stream.launch(
-                    Intent(ctx, StreamActivity::class.java)
-                        .putExtra(StreamActivity.URL, share.openLink.ifEmpty { share.link })
-                        .putExtra(StreamActivity.TITLE, name),
-                )
             } catch (e: RemoteFailure) {
-                busy = null
+                starting = false
                 if (e.status == 409 && !take) takeover = true else error = e.message
             } catch (e: Exception) {
-                busy = null
+                starting = false
                 error = e.message
             }
         }
@@ -157,44 +210,70 @@ fun WadspaceScreen(model: AppModel, id: String, back: () -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
             val m = machine ?: return@Column
-            val building = run != null && !run.finished || here?.building != null
+            val h = here
+            val building = run != null && !run.finished || h?.building != null
+            val streaming = starting || h?.streamed == true
             Text(
                 when {
                     building -> "Building on ${m.name}…"
-                    here == null -> "Not on ${m.name} yet: build it there."
-                    !here!!.built -> "On ${m.name}, not built yet."
-                    here!!.live -> "Streamed from ${m.name}."
-                    here!!.onScreen -> "Open on ${m.name}'s screen."
-                    here!!.container == "running" -> "Running on ${m.name}."
+                    h == null -> "Not on ${m.name} yet: build it there."
+                    !h.built -> "On ${m.name}, not built yet."
+                    openable -> "Streaming from ${m.name}: ready to open."
+                    streaming -> "Starting its stream on ${m.name}…"
+                    h.onScreen -> "Open on ${m.name}'s screen."
+                    h.container == "running" -> "Running on ${m.name}."
                     else -> "Built on ${m.name}."
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
-            val built = here?.built == true && !building
-            Button(onClick = { model.build(id, m) }, Modifier.fillMaxWidth(), enabled = !building && busy == null) {
-                Text(if (here?.built == true) "Build again on ${m.name}" else "Build on ${m.name}")
+            val built = h?.built == true && !building
+            if (!streaming) {
+                Button(onClick = { startStream(false) }, Modifier.fillMaxWidth(), enabled = built) { Text("Stream to this phone") }
+            } else {
+                Button(
+                    onClick = {
+                        val s = share ?: return@Button
+                        stream.launch(
+                            Intent(ctx, StreamActivity::class.java)
+                                .putExtra(StreamActivity.URL, s.openLink.ifEmpty { s.link })
+                                .putExtra(StreamActivity.TITLE, name),
+                        )
+                    },
+                    Modifier.fillMaxWidth(),
+                    enabled = openable,
+                ) {
+                    if (!openable) {
+                        CircularProgressIndicator(Modifier.width(16.dp).height(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Starting the stream…")
+                    } else {
+                        Text("Open stream")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = {
+                    error = null
+                    starting = false
+                    share = null
+                    linkOk = false
+                    scope.launch { runCatching { model.g.remote.stopStream(m.target!!, id) }.onFailure { error = it.message } }
+                }, Modifier.fillMaxWidth()) { Text("Stop streaming") }
             }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = { startStream(false) }, Modifier.fillMaxWidth(), enabled = built && busy == null) { Text("Stream to this phone") }
+            Button(onClick = { model.build(id, m) }, Modifier.fillMaxWidth(), enabled = !building && !streaming) {
+                Text(if (h?.built == true) "Build again on ${m.name}" else "Build on ${m.name}")
+            }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = built && busy == null, onClick = {
+                OutlinedButton(enabled = built && !streaming, onClick = {
                     error = null
                     scope.launch { runCatching { model.g.remote.open(m.target!!, id) }.onFailure { error = it.message } }
                 }, modifier = Modifier.weight(1f)) { Text("Open on ${m.name}") }
-                OutlinedButton(enabled = here?.container == "running" && busy == null, onClick = {
+                OutlinedButton(enabled = h?.container == "running" && !streaming, onClick = {
                     error = null
                     scope.launch { runCatching { model.g.remote.stop(m.target!!, id) }.onFailure { error = it.message } }
                 }, modifier = Modifier.weight(1f)) { Text("Stop") }
-            }
-            busy?.let {
-                Spacer(Modifier.height(16.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.width(20.dp).height(20.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Text(it)
-                }
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp)) }
             run?.let { r -> BuildLog(r.status, r.progress, r.lines, r.error) }

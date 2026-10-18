@@ -2,6 +2,8 @@ package io.wadspaces.core.builder
 
 import io.wadspaces.core.board.Layers
 import io.wadspaces.core.board.Sync
+import io.wadspaces.core.library.Library
+import io.wadspaces.core.library.alive
 import io.wadspaces.core.str
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.json.JsonArray
@@ -38,6 +40,23 @@ sealed interface ExtensionsPick {
     ) : ExtensionsPick
 }
 
+/**
+ * One of the person's Extensions layers, as the builder offers it again:
+ * what's in it, the template it was made on, and the wadspaces that use it.
+ */
+data class Setup(
+    val id: String,
+    val name: String,
+    val templateId: String,
+    val usedBy: List<String>,
+    val focus: Boolean,
+    val webapps: List<WebApp>,
+    val extensions: List<String>,
+    val tools: List<String>,
+) {
+    val empty get() = webapps.isEmpty() && extensions.isEmpty() && tools.isEmpty() && !focus
+}
+
 /** What the wadspace is to the person: its name, look and projects. */
 data class Customization(
     val name: String,
@@ -57,6 +76,46 @@ object Builder {
     /** An id like the board's (wad-board's uid): `<prefix>-<ms in base 36>-<n>`. */
     fun uid(prefix: String, now: Long = System.currentTimeMillis()): String =
         "$prefix-${now.toString(36)}-${seq.getAndIncrement().toString(36)}"
+
+    /** The person's templates whose image is built on a machine (its heartbeat's layers). */
+    fun templatesOn(lib: Library, layers: Set<String>): List<JsonObject> =
+        lib.templates.filter { alive(it) && "template:${it.str("id")}" in layers }
+
+    /** The person's Extensions layers (not deleted), the ones made on `templateId` first. */
+    fun setups(lib: Library, templateId: String? = null): List<Setup> {
+        val live = lib.live()
+        return lib.allExtensions.filter(::alive).map { e ->
+            Setup(
+                id = e.str("id"),
+                name = e.str("name"),
+                templateId = e.str("templateId"),
+                usedBy = live.filter { it.str("extensions") == e.str("id") }.map { (it["customization"] as? JsonObject).str("name") }.filter { it.isNotEmpty() },
+                focus = e.str("browserMode") == "focus",
+                webapps = (e["webapps"] as? JsonArray)?.map { WebApp(it.str("id"), it.str("name"), it.str("url")) } ?: emptyList(),
+                extensions = strings(e["extensions"]),
+                tools = strings(e["tools"]),
+            )
+        }.sortedWith(compareBy({ it.templateId != templateId }, { it.usedBy.isEmpty() }, { it.name.lowercase() }))
+    }
+
+    /** What of a setup a template with these apps can't have, in words. */
+    fun leftOut(s: Setup, apps: List<String>): List<String> = listOfNotNull(
+        "web apps".takeIf { (s.webapps.isNotEmpty() || s.focus) && "wadbrowser" !in apps },
+        "VS Code extensions".takeIf { s.extensions.isNotEmpty() && "vscode" !in apps },
+    )
+
+    /** A setup copied onto a template with these apps, keeping what fits (to change, or save as it is). */
+    fun copyOnto(s: Setup, apps: List<String>): ExtensionsPick.New = ExtensionsPick.New(
+        name = s.name,
+        focus = s.focus && "wadbrowser" in apps,
+        webapps = if ("wadbrowser" in apps) s.webapps else emptyList(),
+        extensions = if ("vscode" in apps) s.extensions else emptyList(),
+        tools = s.tools,
+    )
+
+    /** A setup for this template: as it is when it was made on it, else copied onto it. */
+    fun pickFrom(s: Setup, templateId: String, apps: List<String>): ExtensionsPick =
+        if (s.templateId == templateId) ExtensionsPick.Yours(s.id) else copyOnto(s, apps)
 
     /** A folder name free among `projects` (as the client's free_as). */
     fun freeFolder(want: String, projects: List<Project>): String {
