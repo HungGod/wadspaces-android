@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -28,6 +29,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -49,11 +51,13 @@ import org.json.JSONObject
 /**
  * A wadspace streamed into the app: its sign-in link (from the machine,
  * over the tailnet) in a full-screen WebView that turns with the phone as
- * its auto-rotate setting allows. Two small buttons (drag them out of the
- * way): ⋯ has Keyboard, Resolution, Refresh, Back to WadSpaces (the stream
- * keeps running) and Stop streaming, and Back opens it too; 🔍 moves the
- * view instead of the desktop (drag, pinch, double-tap to fit) until it's
- * tapped again.
+ * its auto-rotate setting allows. Two small buttons in WadSpaces' colours
+ * (drag them out of the way): the dots have Keyboard, Resolution, Refresh,
+ * Back to WadSpaces (the stream keeps running) and Stop streaming, and Back
+ * opens them too; the hand (lime while it's on, as Photoshop's hand tool)
+ * moves the view instead of the desktop (drag, pinch, double-tap to fit)
+ * until it's tapped again. Selkies' own keyboard button is given the same
+ * colours.
  *
  * The remote desktop keeps a size of its own, not the phone's: by default
  * the machine's screen, its pixels and its scaling, so its windows are laid
@@ -92,6 +96,35 @@ class StreamActivity : ComponentActivity() {
         private const val REOPENS = 2
         /** Selkies' hidden input the phone's keyboard types into. */
         private const val ASSIST = "keyboard-input-assist"
+
+        /** WadSpaces' colours (the app's dark theme, ui/Theme.kt), and a resting button's opacity. */
+        private val FG = 0xFFF5F2FA.toInt()
+        private val SURFACE = 0xD91B132D.toInt()
+        private val OUTLINE = 0x2EF0EAFA
+        private val ACCENT = 0xFFC6FF1F.toInt()
+        private val ON_ACCENT = 0xFF0A0614.toInt()
+        private const val IDLE = 0.85f
+
+        /**
+         * Selkies' keyboard button in the same colours as the app's: round,
+         * a night surface, a faint edge and an off-white keyboard (Material
+         * Icons' keyboard, Apache License 2.0). It keeps its place and use.
+         */
+        private val KEYBOARD_BUTTON = """
+            .virtual-keyboard-button {
+              width: 44px !important; height: 44px !important; border-radius: 50% !important;
+              border: 1px solid rgba(240, 234, 250, 0.18) !important; box-shadow: none !important; opacity: 0.85;
+              background: rgba(27, 19, 45, 0.85) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23F5F2FA' d='M20,5H4c-1.1,0 -1.99,0.9 -1.99,2L2,17c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2 -2,-2zM11,8h2v2h-2V8zM11,11h2v2h-2v-2zM8,8h2v2H8V8zM8,11h2v2H8v-2zM7,13H5v-2h2v2zM7,10H5V8h2v2zM16,17H8v-2h8v2zM16,13h-2v-2h2v2zM16,10h-2V8h2v2zM19,13h-2v-2h2v2zM19,10h-2V8h2v2z'/%3E%3C/svg%3E") center / 24px 24px no-repeat !important;
+            }
+            .virtual-keyboard-button:active { opacity: 1; }
+            .virtual-keyboard-button svg { visibility: hidden !important; }
+        """.trimIndent()
+
+        /** A stylesheet added to the page as it starts. */
+        private fun styleJs(css: String) =
+            "(function(){var s=document.createElement('style');s.textContent=${JSONObject.quote(css)};" +
+                "var a=function(){(document.head||document.documentElement).appendChild(s)};" +
+                "document.documentElement?a():document.addEventListener('DOMContentLoaded',a)})();"
 
         /** "1500x1000@2.0" back to a screen. */
         fun screenOf(s: String?): Screen? {
@@ -146,7 +179,7 @@ window.__wadView = window.__wadView || (function () {
     private lateinit var root: FrameLayout
     private lateinit var note: TextView
     private lateinit var controls: LinearLayout
-    private lateinit var zoom: TextView
+    private lateinit var zoom: ImageView
     /** Over the stream while the view is moved: it takes the touches. */
     private lateinit var adjustLayer: View
     private var web: WebView? = null
@@ -196,17 +229,18 @@ window.__wadView = window.__wadView || (function () {
         CookieManager.getInstance().setAcceptCookie(true)
         root = FrameLayout(this)
         note = TextView(this).apply {
-            setTextColor(Color.WHITE)
+            setTextColor(FG)
             textSize = 14f
             setPadding(dp(16), dp(10), dp(16), dp(10))
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
-                setColor(Color.argb(200, 20, 13, 34))
+                setColor(SURFACE)
+                setStroke(dp(1), OUTLINE)
             }
             visibility = View.GONE
         }
-        val menu = button("⋯", "Stream menu")
-        zoom = button("🔍", "Move the view").apply { textSize = 18f }
+        val menu = button(R.drawable.ic_stream_more, "Stream menu")
+        zoom = button(R.drawable.ic_stream_hand, "Move the view")
         controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(menu, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -248,17 +282,24 @@ window.__wadView = window.__wadView || (function () {
         })
     }
 
-    private fun button(glyph: String, what: String) = TextView(this).apply {
-        text = glyph
-        textSize = 22f
-        setTextColor(Color.WHITE)
-        gravity = Gravity.CENTER
-        alpha = 0.55f
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(Color.argb(170, 20, 13, 34))
-        }
+    /** A round button in WadSpaces' colours: a night surface, a faint edge, an off-white icon. */
+    private fun button(icon: Int, what: String) = ImageView(this).apply {
+        setImageResource(icon)
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        setPadding(dp(10), dp(10), dp(10), dp(10))
+        background = GradientDrawable().apply { shape = GradientDrawable.OVAL }
+        paint(this, on = false)
+        alpha = IDLE
         contentDescription = what
+    }
+
+    /** A button's colours: lime with a night icon while it's on. */
+    private fun paint(v: ImageView, on: Boolean) {
+        (v.background as GradientDrawable).apply {
+            setColor(if (on) ACCENT else SURFACE)
+            setStroke(dp(1), if (on) ACCENT else OUTLINE)
+        }
+        v.imageTintList = ColorStateList.valueOf(if (on) ON_ACCENT else FG)
     }
 
     /** A tap on a button does its thing; a drag moves both buttons out of the way. */
@@ -273,7 +314,7 @@ window.__wadView = window.__wadView || (function () {
                     downX = e.rawX - controls.translationX
                     downY = e.rawY - controls.translationY
                     dragged = false
-                    v.alpha = 0.9f
+                    v.alpha = 1f
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
@@ -285,7 +326,7 @@ window.__wadView = window.__wadView || (function () {
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    v.alpha = if (v === zoom && adjusting) 0.95f else 0.55f
+                    v.alpha = if (v === zoom && adjusting) 1f else IDLE
                     if (!dragged && e.actionMasked == MotionEvent.ACTION_UP) tap()
                 }
             }
@@ -365,7 +406,8 @@ window.__wadView = window.__wadView || (function () {
      * on the page, where the stand-in decoder takes it), or, where this
      * WebView can't hand chunks over, decoded in software on the page; and
      * the desktop's size and DPI (none: the phone's size as it turns, at
-     * 1.5x); then the view's pan and zoom.
+     * 1.5x); then the view's pan and zoom, and Selkies' keyboard button in
+     * WadSpaces' colours.
      */
     private fun pageStart(r: Resolution): String {
         val decode = if (video != null) {
@@ -381,7 +423,7 @@ window.__wadView = window.__wadView || (function () {
         }
         return "try{var p=(location.origin+location.pathname).replace(/[^a-zA-Z0-9._-]/g,'_')+'_'," +
             "s=function(k,v){localStorage.setItem(p+k,v)},rm=function(k){localStorage.removeItem(p+k)};" +
-            "$decode$size}catch(e){}$VIEW" + (if (video != null) nativeVideoJs else "")
+            "$decode$size}catch(e){}$VIEW" + styleJs(KEYBOARD_BUTTON) + (if (video != null) nativeVideoJs else "")
     }
 
     private val nativeVideoJs by lazy { assets.open("native-video.js").bufferedReader().use { it.readText() } }
@@ -497,11 +539,11 @@ window.__wadView = window.__wadView || (function () {
     private fun adjust(on: Boolean) {
         adjusting = on
         adjustLayer.visibility = if (on) View.VISIBLE else View.GONE
-        zoom.alpha = if (on) 0.95f else 0.55f
-        (zoom.background as GradientDrawable).setColor(if (on) Color.rgb(124, 77, 255) else Color.argb(170, 20, 13, 34))
+        zoom.alpha = if (on) 1f else IDLE
+        paint(zoom, on)
         if (on) {
             note.tag = "hint"
-            say("Drag to move, pinch to zoom, double-tap to fit. Tap 🔍 again to use the desktop.")
+            say("Drag to move, pinch to zoom, double-tap to fit. Tap the hand again to use the desktop.")
             main.postDelayed({ if (note.tag == "hint") note.visibility = View.GONE }, 3_500)
         } else if (note.tag == "hint") {
             note.visibility = View.GONE
