@@ -8,3 +8,5 @@ local.properties
 # The account's Firebase settings (scripts/sync-wadspaces.sh writes it from
 # ../wadspaces/host/secrets/firebase.toml).
 wadspaces.properties
+# Local tools and the emulator for screenshots (dev/emulator.sh).
+.build/

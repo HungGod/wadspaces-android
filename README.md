@@ -15,3 +15,7 @@ The phone reaches the machine over your Tailscale network. The machine has to tr
 | `scripts/sync-wadspaces.sh` | Takes what the app shares with `../wadspaces`: the catalog, starters, goldens, wallpapers, and the Firebase settings (into the gitignored `wadspaces.properties`). Run it after those change there. |
 
 Kotlin 2.0.21, AGP 8.12.3, Gradle 8.13, compileSdk 36, minSdk 26.
+
+**Trying the screens without an account or a tailnet:** a debug build has a made-up library and machine:
+
+    adb shell am start -n io.wadspaces.android/.MainActivity --ez fake true [--es screen machines|builder|wadspace:vanua-academy]
