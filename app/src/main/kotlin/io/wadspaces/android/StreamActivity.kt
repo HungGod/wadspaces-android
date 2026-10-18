@@ -55,9 +55,10 @@ import kotlin.math.min
  * out as they are there. The stream is fitted to the phone, and zoomed in
  * the page itself (its container scaled), so a closer look is drawn from the
  * stream's own pixels and taps land where they look to. Selkies decodes in
- * software here: the WebView kept every frame its hardware decoder made (a
- * moto g15: about 4 MB a frame, a gigabyte in half a minute of scrolling,
- * until Android killed the keyboard, Tailscale and the app).
+ * hardware again, on trial: on a moto g15 the WebView kept every frame its
+ * hardware decoder made (about 4 MB a frame, a gigabyte in half a minute of
+ * scrolling, until Android killed the keyboard, Tailscale and the app), and
+ * software decoding kept none (bc8d524 set Selkies' prefer_software_decode).
  *
  * The keyboard doesn't resize the page: its space is taken here, and the
  * stream slid up just enough to keep the place last tapped above it. A page
@@ -341,8 +342,9 @@ window.__wadView = window.__wadView || (function () {
 
     /**
      * Selkies' own settings, written before its script reads them (keyed by
-     * the page): decode in software, and the desktop's size and DPI (none:
-     * the phone's size as it turns, at 1.5x); then the view's pan and zoom.
+     * the page): its hardware decoder (a software preference cleared, for
+     * now), and the desktop's size and DPI (none: the phone's size as it
+     * turns, at 1.5x); then the view's pan and zoom.
      */
     private fun pageStart(r: Resolution): String {
         val size = if (r.width == 0) {
@@ -353,7 +355,7 @@ window.__wadView = window.__wadView || (function () {
         }
         return "try{var p=(location.origin+location.pathname).replace(/[^a-zA-Z0-9._-]/g,'_')+'_'," +
             "s=function(k,v){localStorage.setItem(p+k,v)},rm=function(k){localStorage.removeItem(p+k)};" +
-            "s('prefer_software_decode',navigator.userAgent);$size}catch(e){}$VIEW"
+            "rm('prefer_software_decode');$size}catch(e){}$VIEW"
     }
 
     private fun resolutionKey() = "resolution:" + (intent.getStringExtra(MACHINE) ?: "")
