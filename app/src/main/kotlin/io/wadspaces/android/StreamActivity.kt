@@ -13,7 +13,9 @@ import android.os.Looper
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
+import android.util.Base64
 import android.view.ScaleGestureDetector
+import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
@@ -34,12 +36,15 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import io.wadspaces.core.remote.Screen
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+import org.json.JSONObject
 
 /**
  * A wadspace streamed into the app: its sign-in link (from the machine,
@@ -54,11 +59,15 @@ import kotlin.math.min
  * the machine's screen, its pixels and its scaling, so its windows are laid
  * out as they are there. The stream is fitted to the phone, and zoomed in
  * the page itself (its container scaled), so a closer look is drawn from the
- * stream's own pixels and taps land where they look to. Selkies decodes in
- * hardware again, on trial: on a moto g15 the WebView kept every frame its
- * hardware decoder made (about 4 MB a frame, a gigabyte in half a minute of
- * scrolling, until Android killed the keyboard, Tailscale and the app), and
- * software decoding kept none (bc8d524 set Selkies' prefer_software_decode).
+ * stream's own pixels and taps land where they look to.
+ *
+ * The video isn't decoded in the WebView: its hardware path kept every frame
+ * (a moto g15: about 4 MB a frame, a gigabyte in half a minute of scrolling,
+ * until Android killed the keyboard, Tailscale and the app). The page hands
+ * each H.264 chunk to the phone's own decoder ([NativeVideo]), which draws
+ * it on a SurfaceView under the see-through page, laid where the page shows
+ * the stream. A WebView that can't hand chunks over decodes on the page, in
+ * software.
  *
  * The keyboard doesn't resize the page: its space is taken here, and the
  * stream slid up just enough to keep the place last tapped above it. A page
@@ -141,6 +150,11 @@ window.__wadView = window.__wadView || (function () {
     /** Over the stream while the view is moved: it takes the touches. */
     private lateinit var adjustLayer: View
     private var web: WebView? = null
+    /** The phone's decoder and the view it draws into, under the page (none: the page decodes). */
+    private var video: NativeVideo? = null
+    private lateinit var videoView: SurfaceView
+    /** Where the page shows the stream: x, y, width, height in CSS pixels. */
+    private var videoBox: FloatArray? = null
     private val main = Handler(Looper.getMainLooper())
     private var url = ""
     private var retries = 0
@@ -200,6 +214,12 @@ window.__wadView = window.__wadView || (function () {
             addView(zoom, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(10) })
         }
         adjustLayer = View(this).apply { visibility = View.GONE }
+        if (canDecodeNatively()) {
+            val v = NativeVideo(::askKeyframe)
+            video = v
+            videoView = SurfaceView(this).apply { holder.addCallback(v) }
+            root.addView(videoView, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
+        }
         root.addView(makeWeb(), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(adjustLayer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(note, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
@@ -331,6 +351,13 @@ window.__wadView = window.__wadView || (function () {
                 if (e.actionMasked == MotionEvent.ACTION_DOWN) touchY = e.y
                 false
             }
+            if (video != null) {
+                // See-through: the phone's video is under it.
+                setBackgroundColor(Color.TRANSPARENT)
+                WebViewCompat.addWebMessageListener(this, "wadVideo", setOf("https://$host")) { _, message, _, _, _ ->
+                    onVideoMessage(message)
+                }
+            }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 WebViewCompat.addDocumentStartJavaScript(this, pageStart(resolution), setOf("https://$host"))
             }
@@ -342,11 +369,18 @@ window.__wadView = window.__wadView || (function () {
 
     /**
      * Selkies' own settings, written before its script reads them (keyed by
-     * the page): its hardware decoder (a software preference cleared, for
-     * now), and the desktop's size and DPI (none: the phone's size as it
-     * turns, at 1.5x); then the view's pan and zoom.
+     * the page): its video to the phone's decoder (full-frame H.264, decoded
+     * on the page, where the stand-in decoder takes it), or, where this
+     * WebView can't hand chunks over, decoded in software on the page; and
+     * the desktop's size and DPI (none: the phone's size as it turns, at
+     * 1.5x); then the view's pan and zoom.
      */
     private fun pageStart(r: Resolution): String {
+        val decode = if (video != null) {
+            "s('offscreen_worker','false');s('encoder','h264enc');rm('prefer_software_decode');"
+        } else {
+            "s('prefer_software_decode',navigator.userAgent);"
+        }
         val size = if (r.width == 0) {
             "rm('manual_resolution');rm('manual_width');rm('manual_height');s('scaling_dpi','${r.dpi}');"
         } else {
@@ -355,7 +389,66 @@ window.__wadView = window.__wadView || (function () {
         }
         return "try{var p=(location.origin+location.pathname).replace(/[^a-zA-Z0-9._-]/g,'_')+'_'," +
             "s=function(k,v){localStorage.setItem(p+k,v)},rm=function(k){localStorage.removeItem(p+k)};" +
-            "rm('prefer_software_decode');$size}catch(e){}$VIEW"
+            "$decode$size}catch(e){}$VIEW" + (if (video != null) nativeVideoJs else "")
+    }
+
+    private val nativeVideoJs by lazy { assets.open("native-video.js").bufferedReader().use { it.readText() } }
+
+    /** The phone's decoder is used when this WebView can hand binary messages to the app. */
+    private fun canDecodeNatively() =
+        WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)
+
+    /** The page's messages about its video: chunks (binary, a key flag first), its decoder's set-up, and where it's shown. */
+    private fun onVideoMessage(message: WebMessageCompat) {
+        val v = video ?: return
+        if (message.type == WebMessageCompat.TYPE_ARRAY_BUFFER) {
+            val b = message.arrayBuffer
+            if (b.size > 1) v.chunk(b[0].toInt() == 1, b.copyOfRange(1, b.size))
+            return
+        }
+        val m = try {
+            JSONObject(message.data ?: return)
+        } catch (_: Exception) {
+            return
+        }
+        when (m.optString("type")) {
+            "configure" -> v.configure(
+                m.optInt("width"),
+                m.optInt("height"),
+                m.optString("description").takeIf { it.isNotEmpty() && it != "null" }?.let { Base64.decode(it, Base64.DEFAULT) },
+            )
+            "reset" -> v.reset()
+            "box" -> {
+                videoBox = floatArrayOf(m.optDouble("x").toFloat(), m.optDouble("y").toFloat(), m.optDouble("w").toFloat(), m.optDouble("h").toFloat())
+                placeVideo()
+            }
+        }
+    }
+
+    /** The phone's video laid where the page shows the stream (and slid with it for the keyboard). */
+    private fun placeVideo() {
+        val b = videoBox ?: return
+        val d = resources.displayMetrics.density
+        val lp = videoView.layoutParams as FrameLayout.LayoutParams
+        val w = max(1, (b[2] * d).roundToInt())
+        val h = max(1, (b[3] * d).roundToInt())
+        if (lp.width != w || lp.height != h) {
+            lp.width = w
+            lp.height = h
+            videoView.layoutParams = lp
+        }
+        videoView.translationX = b[0] * d
+        videoView.translationY = b[1] * d + (web?.translationY ?: 0f)
+    }
+
+    /** A keyframe from the machine (the phone's decoder starts or catches up on one). */
+    private fun askKeyframe() = main.post {
+        web?.evaluateJavascript(
+            "window.selkiesTransport&&window.selkiesTransport.readyState===1&&window.selkiesTransport.send('REQUEST_KEYFRAME')",
+            null,
+        )
     }
 
     private fun resolutionKey() = "resolution:" + (intent.getStringExtra(MACHINE) ?: "")
@@ -504,7 +597,10 @@ window.__wadView = window.__wadView || (function () {
             root.removeView(it)
             it.destroy()
         }
-        root.addView(makeWeb(), 0, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        video?.reset()
+        // Above the phone's video, if there is one.
+        val at = if (video != null) root.indexOfChild(videoView) + 1 else 0
+        root.addView(makeWeb(), at, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         pan()
     }
 
@@ -513,6 +609,7 @@ window.__wadView = window.__wadView || (function () {
         val w = web ?: return
         val visible = root.height - ime
         w.translationY = if (ime == 0) 0f else (visible - dp(56) - touchY).coerceIn(-ime.toFloat(), 0f)
+        placeVideo()
     }
 
     /**
@@ -587,6 +684,7 @@ window.__wadView = window.__wadView || (function () {
         main.removeCallbacksAndMessages(null)
         web?.destroy()
         web = null
+        video?.release()
         super.onDestroy()
     }
 }
