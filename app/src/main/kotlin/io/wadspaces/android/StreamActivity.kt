@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -31,22 +32,29 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import kotlin.math.abs
 
 /**
  * A wadspace streamed into the app: its sign-in link (from the machine,
- * over the tailnet) in a full-screen WebView, sideways. A small button
- * (drag it out of the way) has Keyboard, Refresh, Back to WadSpaces (the
- * stream keeps running) and Stop streaming; Back opens it too.
+ * over the tailnet) in a full-screen WebView that turns with the phone (the
+ * remote desktop takes the new shape). A small button (drag it out of the
+ * way) has Keyboard, Refresh, Lock rotation, Back to WadSpaces (the stream
+ * keeps running) and Stop streaming; Back opens it too.
  *
- * The page is never resized: Selkies sends the machine a new desktop size
- * on every resize, so a keyboard opening and closing re-sized the remote
- * desktop and its video each time (slow on a phone, and heavy enough to
- * run it out of memory). The keyboard's space is taken here instead, and
- * the stream slid up just enough to keep the place last tapped above it.
- * A page that comes back 5xx is tried again by itself, and a page whose
- * process stops (the phone short of memory) is opened again rather than
- * taking the app with it.
+ * Selkies decodes in software here: the WebView kept every frame its
+ * hardware decoder made (a moto g15: about 4 MB a frame, a gigabyte in
+ * half a minute of scrolling, until Android killed the keyboard, Tailscale
+ * and the app), and software decoding keeps none.
+ *
+ * The keyboard doesn't resize the page: Selkies sends the machine a new
+ * desktop size on every resize, so each keyboard opening and closing would
+ * re-size the remote desktop and its video. The keyboard's space is taken
+ * here instead, and the stream slid up just enough to keep the place last
+ * tapped above it. A page that comes back 5xx is tried again by itself, and
+ * a page whose process stops (the phone short of memory) is opened again
+ * rather than taking the app with it.
  */
 class StreamActivity : ComponentActivity() {
     companion object {
@@ -60,6 +68,13 @@ class StreamActivity : ComponentActivity() {
         private const val REOPENS = 2
         /** Selkies' hidden input the phone's keyboard types into. */
         private const val ASSIST = "keyboard-input-assist"
+        /**
+         * Selkies' own "decode in software" setting (keyed by the page,
+         * holding the browser's user agent), set before its script reads it.
+         */
+        private const val SOFTWARE_DECODE =
+            "try{localStorage.setItem((location.origin+location.pathname).replace(/[^a-zA-Z0-9._-]/g,'_')" +
+                "+'_prefer_software_decode',navigator.userAgent)}catch(e){}"
     }
 
     private lateinit var root: FrameLayout
@@ -72,6 +87,7 @@ class StreamActivity : ComponentActivity() {
     /** Where the stream was last touched (the page's own y), and the keyboard's height. */
     private var touchY = 0f
     private var ime = 0
+    private var rotationLocked = false
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -129,6 +145,11 @@ class StreamActivity : ComponentActivity() {
             ime = h
             pan()
             WindowInsetsCompat.CONSUMED
+        }
+        // Turned around: the menu button kept on the screen.
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            menu.translationX = menu.translationX.coerceIn(-menu.left.toFloat(), (root.width - menu.right).toFloat())
+            menu.translationY = menu.translationY.coerceIn(-menu.top.toFloat(), (root.height - menu.bottom).toFloat())
         }
 
         // The menu button: a tap opens it; a drag moves it out of the way.
@@ -219,6 +240,9 @@ class StreamActivity : ComponentActivity() {
                 if (e.actionMasked == MotionEvent.ACTION_DOWN) touchY = e.y
                 false
             }
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(this, SOFTWARE_DECODE, setOf("https://$host"))
+            }
             loadUrl(this@StreamActivity.url)
         }
         web = w
@@ -268,16 +292,32 @@ class StreamActivity : ComponentActivity() {
     private fun showMenu() {
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setItems(arrayOf("Keyboard", "Refresh", "Back to WadSpaces (keeps streaming)", "Stop streaming")) { _, which ->
+            .setItems(
+                arrayOf(
+                    "Keyboard",
+                    "Refresh",
+                    if (rotationLocked) "Unlock rotation" else "Lock rotation",
+                    "Back to WadSpaces (keeps streaming)",
+                    "Stop streaming",
+                ),
+            ) { _, which ->
                 when (which) {
                     0 -> showKeyboard()
                     1 -> refresh()
-                    2 -> done(stop = false, home = true)
-                    3 -> done(stop = true, home = false)
+                    2 -> lockRotation(!rotationLocked)
+                    3 -> done(stop = false, home = true)
+                    4 -> done(stop = true, home = false)
                 }
             }
             .setNegativeButton("Stay", null)
             .show()
+    }
+
+    /** Held the way it's turned now (lying down), or following the phone again. */
+    private fun lockRotation(lock: Boolean) {
+        rotationLocked = lock
+        requestedOrientation =
+            if (lock) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
     }
 
     private fun refresh() {

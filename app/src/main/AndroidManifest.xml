@@ -23,7 +23,7 @@
             android:name=".StreamActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
             android:exported="false"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="fullSensor"
             android:theme="@style/Theme.WadSpaces.Stream"
             android:windowSoftInputMode="adjustResize|stateHidden" />
     </application>

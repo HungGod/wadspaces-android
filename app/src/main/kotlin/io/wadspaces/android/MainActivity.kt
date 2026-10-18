@@ -1,5 +1,6 @@
 package io.wadspaces.android
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -50,6 +51,16 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val fake = intent.getBooleanExtra("fake", false)
         val start = intent.getStringExtra("screen")
+        // Debug builds: a stream's sign-in link, opened straight
+        // (PHONE=1 wadspaces/apps/wadd/dev/try-tunnel.sh).
+        val stream = intent.getStringExtra("stream")
+        if (BuildConfig.DEBUG && stream != null && savedInstanceState == null) {
+            startActivity(
+                Intent(this, StreamActivity::class.java)
+                    .putExtra(StreamActivity.URL, stream)
+                    .putExtra(StreamActivity.TITLE, "Laptop stream"),
+            )
+        }
         val factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
