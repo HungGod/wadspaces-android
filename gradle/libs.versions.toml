@@ -1,8 +1,9 @@
-# Kotlin 2.0.21 and AGP 8.12.3 (what builds on this laptop already); the
-# androidx and kotlinx versions are ones made with Kotlin 2.0.
+# AGP 9 and Kotlin 2.4 on Gradle 9.8 (the wrapper), so the build runs on the
+# newest Java: the laptop's and the android tool's in a wadspace. AGP 9
+# compiles Kotlin itself: there's no kotlin-android plugin.
 [versions]
-agp = "8.12.3"
-kotlin = "2.0.21"
+agp = "9.4.1"
+kotlin = "2.4.21"
 composeBom = "2024.12.01"
 activityCompose = "1.9.3"
 lifecycle = "2.8.7"
@@ -32,7 +33,6 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
