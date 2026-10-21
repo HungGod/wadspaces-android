@@ -105,8 +105,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
-// Design B's Builder on the phone (wadspaces' ui-mockup-pieces B-Buckets,
-// as the WadSpaces Client has it): one machine's version 4 wadspaces, the
+// Design B's Builder on the phone (the design spike's B-Buckets, as the
+// WadSpaces Client has it): one machine's version 4 wadspaces, the
 // machines along the top. A long press drags a wadspace (onto a machine:
 // a copy there) or a template and those under it ("Just this one": only
 // it) onto another wadspace (a copy) or its own (moved to the end). A tap
