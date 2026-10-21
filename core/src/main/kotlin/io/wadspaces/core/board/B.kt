@@ -16,6 +16,9 @@ import kotlinx.serialization.json.longOrNull
 
 private const val UNDO_STEPS = 40
 
+/** What a wadspace's Recently deleted keeps: the newest this many. */
+const val KEEP_MOST = 30
+
 /** A new wadspace's name, and its one empty template's id and name (Op.Create: to fill in). */
 const val NEW_NAME = "New wadspace"
 const val BLANK_TEMPLATE = "template"
@@ -68,6 +71,12 @@ class BWadspace(
     var createdAt: String? = null,
     var updatedAt: String? = null,
     var deletedAt: String? = null,
+    /**
+     * What was taken out of it, oldest first (Recently deleted), as wad-board's
+     * Kept: `{id, at, kind, …}`, kind "template" (`template`, `place`), "app"
+     * (`template`, `entry`), "project" (`project`) or "background" (`wallpaper`).
+     */
+    val trash: MutableList<JsonObject> = mutableListOf(),
 ) {
     val name get() = (customization["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: ""
     val deleted get() = !deletedAt.isNullOrEmpty()
@@ -84,10 +93,11 @@ class BWadspace(
         "createdAt" to createdAt?.let(::str),
         "updatedAt" to updatedAt?.let(::str),
         "deletedAt" to deletedAt?.let(::str),
+        "trash" to trash.takeIf { it.isNotEmpty() }?.let { JsonArray(it) },
     )
 
     fun copy() = BWadspace(version, id, owner, sharedWith, machine, order, templates.map { it.copy() }.toMutableList(),
-        LinkedHashMap(customization), createdAt, updatedAt, deletedAt)
+        LinkedHashMap(customization), createdAt, updatedAt, deletedAt, trash.toMutableList())
 
     /** Its secrets, made an object when they aren't one. */
     fun secrets(): MutableMap<String, JsonElement> {
@@ -113,6 +123,7 @@ class BWadspace(
             createdAt = sOrNull(v, "createdAt"),
             updatedAt = sOrNull(v, "updatedAt"),
             deletedAt = sOrNull(v, "deletedAt"),
+            trash = arrOf(v, "trash").mapNotNull { it as? JsonObject }.toMutableList(),
         )
     }
 }
@@ -203,6 +214,12 @@ sealed interface Op {
     data class CopyTo(val ids: List<String>, val machine: String) : Op
     data class Delete(val picks: List<Pick>) : Op
     data class Restore(val ws: String) : Op
+
+    /** Something from a wadspace's Recently deleted back where it was. */
+    data class PutBack(val ws: String, val kept: String) : Op
+
+    /** Something in a wadspace's Recently deleted gone for good (null: all of it). */
+    data class Forget(val ws: String, val kept: String? = null) : Op
     data class Rename(val ws: String, val name: String) : Op
     data class Describe(val ws: String, val description: String) : Op
     data class RenameTemplate(val ws: String, val template: String, val name: String) : Op
@@ -228,6 +245,8 @@ sealed interface Op {
             "copyTo" -> CopyTo(strs(v, "ids"), s(v, "machine"))
             "delete" -> Delete(arrOf(v, "picks").map(Pick::of))
             "restore" -> Restore(s(v, "ws"))
+            "putBack" -> PutBack(s(v, "ws"), s(v, "kept"))
+            "forget" -> Forget(s(v, "ws"), sOrNull(v, "kept"))
             "rename" -> Rename(s(v, "ws"), s(v, "name"))
             "describe" -> Describe(s(v, "ws"), s(v, "description"))
             "renameTemplate" -> RenameTemplate(s(v, "ws"), s(v, "template"), s(v, "name"))
@@ -381,10 +400,29 @@ class Board(
             is Op.CopyTo -> op.ids.forEach { fresh(BPayload.Wadspace(it), op.machine, null, g) }
             is Op.Delete -> delete(op.picks)
             is Op.Restore -> must(op.ws).deletedAt = null
+            is Op.PutBack -> {
+                val w = must(op.ws)
+                val i = w.trash.indexOfFirst { s(it, "id") == op.kept }.takeIf { it >= 0 } ?: fail("that's not in Recently deleted")
+                val k = w.trash.removeAt(i)
+                when (s(k, "kind")) {
+                    "template" -> take(w, Got(templates = listOf(BTemplate.of(k["template"]))), num(k, "place")?.toInt(), Where(), g)
+                    "app" -> take(w, Got(entry = BEntry.of(k["entry"])), null, Where(template = s(k, "template")), g)
+                    "project" -> take(w, Got(projects = listOfNotNull(k["project"])), null, Where(), g)
+                    "background" -> take(w, Got(background = k["wallpaper"]), null, Where(), g)
+                }
+            }
+            is Op.Forget -> {
+                val w = must(op.ws)
+                if (op.kept != null) w.trash.removeAll { s(it, "id") == op.kept } else w.trash.clear()
+            }
             is Op.Rename -> must(op.ws).customization["name"] = str(op.name)
             is Op.Describe -> must(op.ws).customization["description"] = str(op.description)
             is Op.RenameTemplate -> template(must(op.ws), op.template).name = op.name
-            is Op.RemoveApp -> template(must(op.ws), op.template).apps.removeAll { it.app == op.app }
+            is Op.RemoveApp -> {
+                val t = template(must(op.ws), op.template)
+                val i = t.apps.indexOfFirst { it.app == op.app }
+                if (i >= 0) keep(op.ws, "app", "template" to str(op.template), "entry" to t.apps.removeAt(i).json())
+            }
             is Op.RemoveExtra -> template(must(op.ws), op.template).apps.firstOrNull { it.app == op.app }?.extras?.removeAll { it.id == op.id }
             is Op.SetMode -> {
                 if (op.mode != "browser" && op.mode != "focus") fail("WadBrowser has no mode ${op.mode}")
@@ -401,15 +439,17 @@ class Board(
                 op.texture?.let { if (it !in V4.TEXTURES) fail("there's no texture $it") }
                 val w = must(op.ws)
                 if (op.texture != null) w.customization["wallpaper"] = obj("type" to str("texture"), "value" to str(op.texture))
-                else w.customization.remove("wallpaper")
+                else w.customization.remove("wallpaper")?.let { keep(op.ws, "background", "wallpaper" to it) }
             }
             is Op.ToggleProject -> {
                 val w = must(op.ws)
                 val list = (w.customization.getOrPut("projects") { JsonArray(emptyList()) } as? JsonArray)?.toMutableList()
                     ?: fail("projects isn't a list")
                 val i = list.indexOfFirst { s(it, "id") == s(op.project, "id") }
-                if (i >= 0) list.removeAt(i) else list += op.project
+                val out = if (i >= 0) list.removeAt(i) else null
+                if (out == null) list += op.project
                 w.customization["projects"] = JsonArray(list)
+                out?.let { keep(op.ws, "project", "project" to it) }
             }
             is Op.SetKey -> {
                 val w = must(op.ws)
@@ -612,16 +652,34 @@ class Board(
         return id
     }
 
+    /** Wadspaces deleted (they wait, deleted); templates, projects and backgrounds taken out (they wait in their wadspace's Recently deleted). */
     private fun delete(picks: List<Pick>) {
         for (pick in picks) when (pick) {
             is Pick.Wadspace -> must(pick.ws).deletedAt = now
-            is Pick.Template -> must(pick.ws).templates.removeAll { it.id == pick.id }
+            is Pick.Template -> {
+                val w = must(pick.ws)
+                val place = w.templates.indexOfFirst { it.id == pick.id }
+                if (place >= 0) keep(pick.ws, "template", "template" to w.templates.removeAt(place).json(), "place" to JsonPrimitive(place))
+            }
             is Pick.Project -> {
                 val w = must(pick.ws)
-                (w.customization["projects"] as? JsonArray)?.let { l -> w.customization["projects"] = JsonArray(l.filter { s(it, "id") != pick.id }) }
+                val l = (w.customization["projects"] as? JsonArray) ?: continue
+                val i = l.indexOfFirst { s(it, "id") == pick.id }
+                if (i >= 0) {
+                    w.customization["projects"] = JsonArray(l.filterIndexed { j, _ -> j != i })
+                    keep(pick.ws, "project", "project" to l[i])
+                }
             }
-            is Pick.Background -> must(pick.ws).customization.remove("wallpaper")
+            is Pick.Background -> must(pick.ws).customization.remove("wallpaper")?.let { keep(pick.ws, "background", "wallpaper" to it) }
         }
+    }
+
+    /** A piece (`kind` and its fields) into `ws`'s Recently deleted (the newest KEEP_MOST stay). */
+    private fun keep(ws: String, kind: String, vararg fields: Pair<String, JsonElement>) {
+        val w = must(ws)
+        val id = generateSequence(1) { it + 1 }.map { "k$it" }.first { k -> w.trash.none { s(it, "id") == k } }
+        w.trash += obj("id" to str(id), "at" to str(now), "kind" to str(kind), *fields)
+        if (w.trash.size > KEEP_MOST) w.trash.removeAt(0)
     }
 
     // ------------------------------------------------------------ keys

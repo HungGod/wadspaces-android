@@ -258,6 +258,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
     var picked by remember { mutableStateOf(setOf<String>()) }
     var justOne by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<String?>(null) }
+    var trashOpen by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -290,10 +291,14 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
         if (opened != null) {
             BackHandler { editing = null }
             WadspaceEditor(model, board, rev, opened, runs[opened.id], ed, close = { editing = null }, open = open)
+        } else if (trashOpen) {
+            BackHandler { trashOpen = false }
+            TrashScreen(model, board, rev, ed, close = { trashOpen = false })
         } else Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Builder", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 TextButton(onClick = { model.edit(Op.Undo) }, enabled = board.canUndo) { Text("Undo") }
+                TextButton(onClick = { trashOpen = true }) { Text("Deleted") }
                 TextButton(onClick = {
                     selecting = !selecting
                     picked = emptySet()
@@ -339,7 +344,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
                 }
             }
         }
-        if (opened == null && selecting && picked.isNotEmpty()) {
+        if (opened == null && !trashOpen && selecting && picked.isNotEmpty()) {
             Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), tonalElevation = 6.dp, shadowElevation = 6.dp) {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { picked.forEach(model::buildOnItsMachine) }, Modifier.weight(1f)) { Text("Build (${picked.size})") }

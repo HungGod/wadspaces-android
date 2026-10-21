@@ -102,8 +102,15 @@ private fun keyCount(w: BWadspace): Int {
 @Composable
 internal fun StackTab(model: AppModel, board: Board, rev: Int, w: BWadspace, ed: Edits, modifier: Modifier = Modifier) {
     var sources by rememberSaveable { mutableStateOf(true) }
-    // Its machine's first, then the others', each in board order.
-    val others = board.wadspaces.filter { !it.deleted && it.id != w.id }.sortedBy { if (it.machine == w.machine) 0 else 1 }
+    // Its machine's first, then the others', then deleted ones (their parts
+    // come back this way), each in board order.
+    val others = board.wadspaces.filter { it.id != w.id }.sortedBy { o ->
+        when {
+            o.deleted -> 2
+            o.machine == w.machine -> 0
+            else -> 1
+        }
+    }
     fun pull(p: BPayload, at: Where = Where()) {
         val moved = p.source == w.id
         ed.done("${if (moved) "Moved" else "Added"} ${labelOf(model, board, p)}", Op.Drop(p, w.id, at))
@@ -190,7 +197,8 @@ private fun SourceStack(model: AppModel, board: Board, rev: Int, o: BWadspace, p
                 Column(Modifier.weight(1f)) {
                     Text(name, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "on ${board.machines.firstOrNull { it.id == o.machine }?.name?.ifEmpty { null } ?: o.machine} · all of it",
+                        (if (o.deleted) "deleted · " else "") +
+                            "on ${board.machines.firstOrNull { it.id == o.machine }?.name?.ifEmpty { null } ?: o.machine} · all of it",
                         color = Color.White.copy(alpha = 0.7f),
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
