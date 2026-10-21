@@ -6,12 +6,7 @@ import io.wadspaces.core.board.BMachine
 import io.wadspaces.core.board.BWadspace
 import io.wadspaces.core.board.Board
 import io.wadspaces.core.board.Op
-import io.wadspaces.core.board.Sync
 import io.wadspaces.core.board.V4
-import io.wadspaces.core.builder.Builder
-import io.wadspaces.core.builder.Customization
-import io.wadspaces.core.builder.ExtensionsPick
-import io.wadspaces.core.builder.TemplatePick
 import io.wadspaces.core.firebase.Session
 import io.wadspaces.core.firebase.Values
 import io.wadspaces.core.library.Library
@@ -23,8 +18,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 
 /** The library as far as it's read. */
 sealed interface LibState {
@@ -168,7 +161,7 @@ class AppModel(val g: Graph) : ViewModel() {
         val cur = _board.value
         if (cur != null) {
             cur.board.machines = machines
-            cur.board.reserved = lib.wadspaces.map { it.str("id") }
+            cur.board.reserved = lib.reserved
             val unsaved = cur.board.plan(saved, "", "").isNotEmpty()
             if (pending > 0 || unsaved || byId(docs) == byId(saved)) {
                 _board.value = cur.copy(rev = cur.rev + 1)
@@ -323,32 +316,6 @@ class AppModel(val g: Graph) : ViewModel() {
     private fun update(id: String, f: (MachineView) -> MachineView) {
         _machines.value = _machines.value.map { if (it.machine.id == id) f(it) else it }
     }
-
-    /**
-     * The builder's picks saved to the account as one new wadspace (the
-     * board's planNew, one commit): its id.
-     */
-    suspend fun save(t: TemplatePick, e: ExtensionsPick, c: Customization): String {
-        val lib = lib() ?: error("Your library isn't here yet.")
-        val uid = g.auth.uid ?: error("Signed out.")
-        val id = Builder.uid("stack")
-        val stack = Builder.stack(id, t, e, c, lib.lib())
-        val plan = Sync.planNew(stack, lib.docs(), uid, Values.rfc3339(System.currentTimeMillis()))
-        g.account.save(plan)
-        // As saved, before the account is read again.
-        _library.value = LibState.Ready(
-            lib.copy(
-                templates = docsOf(plan, "templates"),
-                extensions = docsOf(plan, "extensions"),
-                wadspaces = docsOf(plan, "wadspaces"),
-            ),
-        )
-        refresh()
-        return id
-    }
-
-    private fun docsOf(plan: JsonObject, k: String): List<JsonObject> =
-        ((plan["docs"] as JsonObject)[k] as JsonArray).map { it as JsonObject }
 
     /** A code to link a new machine with (WadSpaces asks for it there). */
     suspend fun linkCode(name: String): String = g.account.createEnrollCode(name)

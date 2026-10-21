@@ -27,7 +27,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.wadspaces.android.AppModel
 import io.wadspaces.android.LibState
-import io.wadspaces.core.board.Layers
 import io.wadspaces.core.board.V4
 import io.wadspaces.core.library.alive
 import io.wadspaces.core.get
@@ -37,29 +36,16 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-/**
- * What a wadspace is made of, in a line: its template's apps, and its
- * Extensions (a version 4 one: its templates, and the machine it's on).
- */
+/** What a wadspace is made of, in a line: its templates, their apps, and the machine it's on. */
 fun madeOf(w: JsonObject, lib: Library, model: AppModel): String {
-    if (V4.isV4(w)) {
-        val on = lib.machines.firstOrNull { it.str("id") == w.str("machine") }?.let { it.str("name").ifEmpty { it.str("hostname") } }
-        val templates = (w["templates"] as? JsonArray)?.map { (it as JsonObject).str("name") } ?: emptyList()
-        val apps = V4.appsOf(w).map { model.g.packages.appName(it.str("app")) }
-        return listOfNotNull(
-            templates.joinToString(" › ").ifEmpty { "No templates yet" },
-            apps.joinToString(", ").ifEmpty { null },
-            on?.let { "on $it" },
-        ).joinToString(" · ")
-    }
-    val t = Layers.chainOf(lib.lib(), w.str("template")).lastOrNull()
-    val apps = (t?.get("apps") as? JsonArray)?.map { it.toString().trim('"') } ?: emptyList()
-    val e = lib.allExtensions.firstOrNull { it.str("id") == w.str("extensions") }
-    val parts = listOfNotNull(
-        t?.let { "${it.str("name")}: ${model.g.catalog.appNames(apps)}" } ?: "No template yet",
-        e?.str("name"),
-    )
-    return parts.joinToString(" · ")
+    val on = lib.machines.firstOrNull { it.str("id") == w.str("machine") }?.let { it.str("name").ifEmpty { it.str("hostname") } }
+    val templates = (w["templates"] as? JsonArray)?.map { (it as JsonObject).str("name") } ?: emptyList()
+    val apps = V4.appsOf(w).map { model.g.packages.appName(it.str("app")) }
+    return listOfNotNull(
+        templates.joinToString(" › ").ifEmpty { "No templates yet" },
+        apps.joinToString(", ").ifEmpty { null },
+        on?.let { "on $it" },
+    ).joinToString(" · ")
 }
 
 @Composable
@@ -72,8 +58,8 @@ fun HomeScreen(model: AppModel, open: (String) -> Unit, create: () -> Unit) {
             Button(onClick = model::refresh, Modifier.padding(top = 16.dp)) { Text("Try again") }
         }
         is LibState.Ready -> {
-            // Version 3's, then each machine's version 4 wadspaces in their order.
-            val list = s.lib.live() + s.lib.v4.filter(::alive).sortedWith(
+            // Each machine's wadspaces in their order.
+            val list = s.lib.v4.filter(::alive).sortedWith(
                 compareBy({ it.str("machine") }, { (it["order"] as? JsonPrimitive)?.content?.toDoubleOrNull() ?: 0.0 }),
             )
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
@@ -100,7 +86,7 @@ fun WadspaceCard(w: JsonObject, lib: Library, model: AppModel, onClick: () -> Un
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
-        Wallpaper(w["customization"]["wallpaper"], model.g.catalog, Modifier.fillMaxWidth().height(120.dp).padding(8.dp))
+        Wallpaper(w["customization"]["wallpaper"], Modifier.fillMaxWidth().height(120.dp).padding(8.dp))
         Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
             Text(w["customization"].str("name").ifEmpty { "Untitled" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(

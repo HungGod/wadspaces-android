@@ -52,7 +52,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import io.wadspaces.android.AppModel
 import io.wadspaces.android.LibState
 import io.wadspaces.android.StreamActivity
-import io.wadspaces.core.board.Layers
 import io.wadspaces.core.board.V4
 import io.wadspaces.core.firebase.HttpRequest
 import io.wadspaces.core.get
@@ -75,20 +74,17 @@ private val RemoteWadspace.streamUp get() = streamed && live && phase == "ready"
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Boolean, back: () -> Unit) {
+fun WadspaceScreen(model: AppModel, id: String, back: () -> Unit) {
     val ctx = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val state by model.library.collectAsState()
     val machines by model.machines.collectAsState()
     val runs by model.runs.collectAsState()
     val lib = (state as? LibState.Ready)?.lib ?: return Centered("Your library isn't here yet.")
-    val w = lib.wadspaces.firstOrNull { it.str("id") == id } ?: lib.v4.firstOrNull { it.str("id") == id } ?: return Centered("That wadspace is gone.")
-    // A version 4 wadspace lives on one machine.
-    val v4 = V4.isV4(w)
+    val w = lib.v4.firstOrNull { it.str("id") == id } ?: return Centered("That wadspace is gone.")
+    // It lives on one machine.
     val home = w.str("machine")
-    val ready = machines.filter { it.ready && it.machine.online && (!v4 || it.machine.id == home) }.map { it.machine }
-    var picked by remember { mutableStateOf(startOn) }
-    val machine: Machine? = ready.firstOrNull { it.id == picked } ?: ready.firstOrNull()
+    val machine: Machine? = machines.firstOrNull { it.ready && it.machine.online && it.machine.id == home }?.machine
     var here by remember(machine?.id) { mutableStateOf<RemoteWadspace?>(null) }
     // The stream: its link (once started or found), and whether it answers from here.
     var share by remember(machine?.id) { mutableStateOf<StreamShare?>(null) }
@@ -96,11 +92,10 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
     var linkOk by remember(machine?.id) { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var takeover by remember { mutableStateOf(false) }
-    var asked by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val run = runs[id]?.takeIf { it.machine == machine?.id || (v4 && it.machine == home) }
+    val run = runs[id]?.takeIf { it.machine == home }
     val name = w["customization"].str("name").ifEmpty { "Untitled" }
-    val notReady = if (v4) "Its customization needs a name.".takeIf { w["customization"].str("name").isBlank() } else Layers.notReady(w, lib.lib())
+    val notReady = "Its customization needs a name.".takeIf { w["customization"].str("name").isBlank() }
     val streamUp = here?.streamUp == true
     val openable = streamUp && linkOk && share != null
 
@@ -112,15 +107,6 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
             scope.launch { runCatching { model.g.remote.stopStream(m.target!!, id) } }
         }
         if (r.data?.getBooleanExtra(StreamActivity.HOME, false) == true) back()
-    }
-
-    // Built on a machine straight after saving (the builder's "Save and build").
-    LaunchedEffect(machine?.id) {
-        val m = machine ?: return@LaunchedEffect
-        if (buildFirst && !asked && m.id == startOn) {
-            asked = true
-            model.build(id, m)
-        }
     }
 
     // What the machine has of it: every 5 s (2 s while a stream comes up),
@@ -189,7 +175,7 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         TextButton(onClick = back, Modifier.padding(start = 8.dp, top = 4.dp)) { Text("‹ Wadspaces") }
-        Wallpaper(w["customization"]["wallpaper"], model.g.catalog, Modifier.fillMaxWidth().aspectRatio(16f / 9f).padding(horizontal = 16.dp))
+        Wallpaper(w["customization"]["wallpaper"], Modifier.fillMaxWidth().aspectRatio(16f / 9f).padding(horizontal = 16.dp))
         Column(Modifier.padding(20.dp)) {
             Text(name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             w["customization"].str("description").takeIf { it.isNotBlank() }?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -201,7 +187,7 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
                 Text(notReady, color = MaterialTheme.colorScheme.error)
                 return@Column
             }
-            if (ready.isEmpty() && v4) {
+            if (machine == null) {
                 val on = machines.firstOrNull { it.machine.id == home }
                 Text(
                     "${on?.machine?.name ?: "Its machine"} isn't reachable from this phone (${on?.status ?: "not seen"}). It builds there anyway: its relay runs the build when it's on.",
@@ -214,19 +200,7 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
                 runs[id]?.let { r -> BuildLog(r.status, r.progress, r.lines, r.error) }
                 return@Column
             }
-            if (ready.isEmpty()) {
-                Text(
-                    "None of your machines trusts this phone yet, or none is up. On the machine: WadSpaces → Machines → Tailnet, then allow this phone.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                return@Column
-            }
-            Text("On", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ready.forEach { m -> FilterChip(m.id == machine?.id, { picked = m.id }, { Text(m.name) }) }
-            }
-            Spacer(Modifier.height(8.dp))
-            val m = machine ?: return@Column
+            val m = machine
             val h = here
             val building = run != null && !run.finished || h?.building != null
             val streaming = starting || h?.streamed == true

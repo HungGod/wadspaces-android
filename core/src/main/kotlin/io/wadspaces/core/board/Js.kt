@@ -37,8 +37,6 @@ internal fun truthy(v: JsonElement?): Boolean = when (v) {
     else -> true
 }
 
-internal fun alive(v: JsonElement?) = !truthy(field(v, "deletedAt"))
-
 internal fun str(x: String) = JsonPrimitive(x)
 internal fun strList(xs: List<String>) = JsonArray(xs.map(::JsonPrimitive))
 
@@ -48,10 +46,3 @@ internal fun obj(vararg pairs: Pair<String, JsonElement?>): JsonObject =
 
 internal fun JsonObject.with(k: String, v: JsonElement): JsonObject = JsonObject(LinkedHashMap(this).apply { put(k, v) })
 internal fun JsonObject.without(k: String): JsonObject = JsonObject(LinkedHashMap(this).apply { remove(k) })
-
-/** `over`'s fields into `base` (replaced where both have them). */
-internal fun merge(base: JsonElement?, over: JsonElement?): JsonObject {
-    val out = LinkedHashMap<String, JsonElement>((base as? JsonObject) ?: emptyMap())
-    (over as? JsonObject)?.forEach { (k, v) -> out[k] = v }
-    return JsonObject(out)
-}

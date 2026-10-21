@@ -29,15 +29,14 @@ class RemoteWaddTest {
         val hb = json.parseToJsonElement(
             """{"id": "m1", "name": "Surface", "lastSeen": "${io.wadspaces.core.firebase.Values.rfc3339(now - 20_000)}",
                 "tailnet": {"state": "running", "ips": ["fd7a:115c:a1e0::a01:2b03", "100.101.102.103"], "port": 8087, "listening": true},
-                "images": [{"layer": "template:dev", "id": "a"}, {"layer": "base", "id": "b"}],
+                "images": [{"layer": "set:9ee4c0aa0079", "id": "a", "from": "b"}, {"layer": "base", "id": "b"}],
                 "screen": {"width": 1500, "height": 1000, "scale": 2.0}}""",
         ).jsonObject
         val m = Machine.of(hb, now)
         assertEquals(Triple("Surface", true, "running"), Triple(m.name, m.online, m.tailnet))
         assertEquals(Target("100.101.102.103", 8087), m.target)
-        assertEquals(setOf("template:dev", "base"), m.layers)
         // Its image rows, as V4.state reads them.
-        assertEquals(listOf("template:dev", "base"), m.images.map { it.str("layer") })
+        assertEquals(listOf("set:9ee4c0aa0079", "base"), m.images.map { it.str("layer") })
         assertEquals(Screen(1500, 1000, 2.0), m.screen)
         assertEquals(3000 to 2000, m.screen!!.pixelWidth to m.screen!!.pixelHeight)
         assertEquals("http://[fd7a:115c:a1e0::1]:8087", Target("fd7a:115c:a1e0::1", 8087).base)

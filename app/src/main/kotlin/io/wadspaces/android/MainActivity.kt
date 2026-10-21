@@ -41,8 +41,7 @@ sealed interface Screen {
     data object Home : Screen
     data object Machines : Screen
     data object Builder : Screen
-    /** `machine`: on that one to start with; `build`: built there straight away. */
-    data class Wadspace(val id: String, val machine: String? = null, val build: Boolean = false) : Screen
+    data class Wadspace(val id: String) : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -112,7 +111,7 @@ fun App(model: AppModel, start: String?) {
                 Screen.Home -> HomeScreen(model, open = { screen = Screen.Wadspace(it) }, create = { screen = Screen.Builder })
                 Screen.Machines -> MachinesScreen(model)
                 Screen.Builder -> BuilderBScreen(model, open = { screen = Screen.Wadspace(it) })
-                is Screen.Wadspace -> WadspaceScreen(model, s.id, s.machine, s.build, back = { screen = Screen.Home })
+                is Screen.Wadspace -> WadspaceScreen(model, s.id, back = { screen = Screen.Home })
             }
         }
     }

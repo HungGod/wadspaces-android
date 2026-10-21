@@ -25,51 +25,24 @@ import kotlinx.serialization.json.put
 data class Repo(val fullName: String, val name: String, val private: Boolean, val description: String)
 
 /**
- * The person's library from their account (wad-account's library.rs): the
- * Builder's documents, their wadspaces (deleted ones too: new ids skip
- * them; version 3's and design B's version 4, kept apart), their machines'
- * heartbeats, and their GitHub repos.
+ * The person's library from their account (wad-account's library.rs):
+ * their wadspaces (version 4, design B's; deleted ones too: new ids skip
+ * them), their machines' heartbeats, and their GitHub repos.
  */
 data class Library(
-    val templates: List<JsonObject> = emptyList(),
-    val extensions: List<JsonObject> = emptyList(),
-    /** Extensions layers from before they had that name. */
-    val customizations: List<JsonObject> = emptyList(),
-    /** Version 3 wadspaces (a template chain and an Extensions layer). */
-    val wadspaces: List<JsonObject> = emptyList(),
-    /** Version 4 wadspaces (design B's: each its own templates, on one machine). */
+    /** Wadspaces: each its own templates, on one machine. */
     val v4: List<JsonObject> = emptyList(),
+    /** Ids of the collection's other documents (from before version 4): a new wadspace never takes one. */
+    val reserved: List<String> = emptyList(),
     val machines: List<JsonObject> = emptyList(),
     val repos: List<Repo> = emptyList(),
 ) {
-    /** Extensions, the old customizations counted too. */
-    val allExtensions: List<JsonObject>
-        get() = extensions + customizations.filter { c -> extensions.none { it.str("id") == c.str("id") } }
-
-    /** What wad-core's layers functions take: `{templates, extensions}`. */
-    fun lib(): JsonObject = buildJsonObject {
-        put("templates", JsonArray(templates))
-        put("extensions", JsonArray(allExtensions))
-    }
-
-    /** What the Builder's planNew takes: `{templates, extensions, wadspaces}`. */
-    fun docs(): JsonObject = buildJsonObject {
-        put("templates", JsonArray(templates))
-        put("extensions", JsonArray(allExtensions))
-        put("wadspaces", JsonArray(wadspaces))
-    }
-
-    /** The wadspaces that aren't deleted, in the board's order. */
-    fun live(): List<JsonObject> = wadspaces
-        .filter(::alive)
-        .sortedWith(compareBy({ (it["order"] as? JsonPrimitive)?.content?.toDoubleOrNull() ?: 0.0 }, { it.str("createdAt") }))
-
-    /** Design B's board: the machines and version 4 wadspaces, each machine's row in order; version 3's ids reserved. */
+    /** Design B's board: the machines and wadspaces, each machine's row in order. */
     fun board(machines: List<BMachine>, now: String): Board = Board(
         machines = machines,
         wadspaces = v4.map(BWadspace::of).sortedWith(compareBy({ it.order }, { it.id })).toMutableList(),
         now = now,
-        reserved = wadspaces.map { it.str("id") },
+        reserved = reserved,
     )
 }
 
@@ -97,19 +70,13 @@ class Account(val auth: Auth, val firestore: Firestore) {
                 })
             })
         }
-        val templates = async { firestore.list("users/$uid/templates") }
-        val extensions = async { firestore.list("users/$uid/extensions") }
-        val customizations = async { firestore.list("users/$uid/customizations") }
         val machines = async { firestore.list("users/$uid/machines") }
         val wadspaces = async { firestore.queryRoot(owned) }
         val repos = async { runCatching { firestore.get("users/$uid/github/repos") }.getOrNull() }
-        val (v4, v3) = wadspaces.await().partition(V4::isV4)
+        val (v4, others) = wadspaces.await().partition(V4::isV4)
         Library(
-            templates = templates.await(),
-            extensions = extensions.await(),
-            customizations = customizations.await(),
-            wadspaces = v3,
             v4 = v4,
+            reserved = others.map { it.str("id") },
             machines = machines.await(),
             repos = repos.await()?.let(::reposOf) ?: emptyList(),
         )
@@ -117,24 +84,6 @@ class Account(val auth: Auth, val firestore: Firestore) {
 
     /** The machines' heartbeats alone. */
     suspend fun machines(): List<JsonObject> = firestore.list("users/${uid()}/machines")
-
-    /**
-     * A plan's writes (planNew's: templates, Extensions, the wadspace), all
-     * or none: documents as the rules have them (no `id`; a wadspace the
-     * owner's, shared with no one).
-     */
-    suspend fun save(plan: JsonElement) {
-        val uid = uid()
-        fun strip(d: JsonElement) = JsonObject((d as JsonObject) - "id")
-        val writes = mutableListOf<Write>()
-        (plan["templates"] as? JsonArray)?.forEach { writes += Write("users/$uid/templates/${it.str("id")}", strip(it)) }
-        (plan["extensions"] as? JsonArray)?.forEach { writes += Write("users/$uid/extensions/${it.str("id")}", strip(it)) }
-        (plan["wadspaces"] as? JsonArray)?.forEach {
-            val data = strip(it) + mapOf("owner" to JsonPrimitive(uid), "sharedWith" to (it["sharedWith"] as? JsonArray ?: JsonArray(emptyList())))
-            writes += Write("wadspaces/${it.str("id")}", JsonObject(data))
-        }
-        if (writes.isNotEmpty()) firestore.commit(writes)
-    }
 
     /**
      * Design B's board's documents (its plan), all or none: each the owner's,

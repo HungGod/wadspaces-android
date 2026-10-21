@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # What the app takes from the wadspaces repo beside it (WADSPACES_DIR,
-# default ../wadspaces): the catalog and starters, the package graph
-# (packages.json: each app's package and what packages need, for naming a
-# version 4 wadspace's set), the goldens its core is checked against (the
-# board's, design B's board's, wad-core's, the phone's planNew cases), the
-# Builder's wallpapers and textures, the catalog's icons as PNGs (the
-# Builder's desktop preview), and the account's Firebase settings
-# (into the gitignored wadspaces.properties). SOURCE says which commit
-# they're from.
+# default ../wadspaces): the catalog, the package graph (packages.json: each
+# app's package and what packages need, for naming a wadspace's set), the
+# goldens its core is checked against (design B's board's and wad-core's),
+# the Builder's textures, the catalog's icons as PNGs (the Builder's desktop
+# preview), and the account's Firebase settings (into the gitignored
+# wadspaces.properties). SOURCE says which commit they're from.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 src=${WADSPACES_DIR:-$here/../wadspaces}
@@ -15,14 +13,17 @@ src=${WADSPACES_DIR:-$here/../wadspaces}
 assets=$here/app/src/main/assets
 fixtures=$here/core/src/test/resources/fixtures
 mkdir -p "$assets/wallpapers" "$fixtures"
-cp "$src/crates/wad-core/data/catalog.json" "$src/crates/wad-core/data/starters.json" "$assets/"
-cp "$src/fixtures/board/goldens.json" "$fixtures/board-goldens.json"
-cp "$src/fixtures/board/phone.json" "$fixtures/phone.json"
+cp "$src/crates/wad-core/data/catalog.json" "$assets/"
 cp "$src/fixtures/core/goldens.json" "$fixtures/core-goldens.json"
 cp "$src/fixtures/board/b.json" "$fixtures/b-goldens.json"
 (cd "$src" && cargo xtask packages graph) > "$assets/packages.json"
 cp "$assets/packages.json" "$fixtures/packages.json"
-(cd "$src" && cargo run -q -p wad-wallpaper --example presets -- "$assets/wallpapers")
+# The textures alone (the presets example draws the old wallpapers too).
+drawn=$(mktemp -d)
+trap 'rm -rf "$drawn"' EXIT
+(cd "$src" && cargo run -q -p wad-wallpaper --example presets -- "$drawn")
+rm -f "$assets"/wallpapers/*
+cp "$drawn"/texture-*.png "$assets/wallpapers/"
 (cd "$src" && cargo xtask phone-icons "$assets/icons")
 commit=$(git -C "$src" rev-parse --short HEAD)
 dirty=$(git -C "$src" status --porcelain -- crates/wad-core crates/wad-board fixtures crates/wad-wallpaper xtask | head -1)

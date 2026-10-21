@@ -58,55 +58,17 @@ fun iconBitmap(name: String): ImageBitmap? {
     }
 }
 
-/**
- * A wadspace's wallpaper: a texture (version 4's, in the theme's tone), a
- * preset's picture, a colour, a picture of its own, else the brand's colours
- * (black or white, for a version 4 wadspace with none).
- */
+/** A wadspace's wallpaper: its texture, in the theme's tone, else the brand's colours. */
 @Composable
-fun Wallpaper(wallpaper: JsonElement?, catalog: Catalog, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
-    val type = wallpaper.str("type")
-    val value = wallpaper.str("value")
-    val texture = if (type == "texture") textureBitmap(value) else null
-    val image: ImageBitmap? = texture ?: remember(type, value) {
-        val preset = catalog.presets.firstOrNull { it.wallpaper.str("value") == value }
-        when {
-            preset != null -> runCatching {
-                ctx.assets.open("wallpapers/${preset.thumb}").use { BitmapFactory.decodeStream(it).asImageBitmap() }
-            }.getOrNull()
-            type == "image" && value.startsWith("data:") -> runCatching {
-                val bytes = Base64.decode(value.substringAfter(";base64,"), Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
-            }.getOrNull()
-            else -> null
-        }
-    }
-    val color = if (type == "color") parseColor(value) else null
+fun Wallpaper(wallpaper: JsonElement?, modifier: Modifier = Modifier) {
+    val texture = if (wallpaper.str("type") == "texture") textureBitmap(wallpaper.str("value")) else null
     Box(modifier.clip(RoundedCornerShape(14.dp))) {
-        when {
-            image != null -> Image(image, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
-            color != null -> Box(Modifier.matchParentSize().background(color))
-            else -> Box(
-                Modifier.matchParentSize().background(
-                    Brush.linearGradient(listOf(Wad.surface3, Wad.bg, Color(0xFF2A1747))),
-                ),
-            )
+        if (texture != null) {
+            Image(texture, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+        } else {
+            Box(Modifier.matchParentSize().background(Brush.linearGradient(listOf(Wad.surface3, Wad.bg, Color(0xFF2A1747)))))
         }
     }
-}
-
-/** #rgb, #rrggbb or #rrggbbaa. */
-fun parseColor(css: String): Color? {
-    val h = css.trim().removePrefix("#")
-    val full = when (h.length) {
-        3 -> h.map { "$it$it" }.joinToString("") + "ff"
-        6 -> h + "ff"
-        8 -> h
-        else -> return null
-    }
-    val v = full.toLongOrNull(16) ?: return null
-    return Color(((v and 0xff) shl 24 or (v shr 8)).toInt())
 }
 
 /** A small dot: on (accent), busy, or off. */

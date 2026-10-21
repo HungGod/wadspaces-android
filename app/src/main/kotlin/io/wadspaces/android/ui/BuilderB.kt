@@ -90,13 +90,13 @@ import io.wadspaces.core.board.BPayload
 import io.wadspaces.core.board.BTemplate
 import io.wadspaces.core.board.BWadspace
 import io.wadspaces.core.board.Board
-import io.wadspaces.core.board.Layers
+import io.wadspaces.core.board.uid
+import io.wadspaces.core.board.webappId
 import io.wadspaces.core.board.NEW_NAME
 import io.wadspaces.core.board.Op
 import io.wadspaces.core.board.Pick
 import io.wadspaces.core.board.V4
 import io.wadspaces.core.board.Where
-import io.wadspaces.core.builder.Builder
 import io.wadspaces.core.library.Library
 import io.wadspaces.core.library.Repo
 import kotlinx.coroutines.launch
@@ -758,7 +758,7 @@ private fun siteWebApp(text: String): BExtra? {
     if (host.isEmpty() || host.any { it.isWhitespace() } || '.' !in host) return null
     val first = host.substringBefore('.')
     val name = first.replaceFirstChar { it.uppercase() }
-    return BExtra(Layers.webappId(name), name, url)
+    return BExtra(webappId(name), name, url)
 }
 
 /** Its title, description, background (a texture), projects. */
@@ -832,7 +832,7 @@ private fun CustomTab(model: AppModel, rev: Int, w: BWadspace, lib: Library?) {
     if (repos.isEmpty()) Text("Your GitHub repositories show here once a machine has read them.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     fun add(r: Repo, mounted: Boolean) {
         val p = buildMap {
-            put("id", JsonPrimitive(Builder.uid("project")))
+            put("id", JsonPrimitive(uid("project")))
             put("kind", JsonPrimitive("github"))
             put("repo", JsonPrimitive(r.fullName))
             put("as", JsonPrimitive(freeAs(r.name, projects)))

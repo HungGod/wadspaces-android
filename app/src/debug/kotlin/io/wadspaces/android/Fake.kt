@@ -43,13 +43,6 @@ private class FakeServer : Http {
         fun put(path: String, v: String) {
             docs[path] = json.parseToJsonElement(v).jsonObject
         }
-        val aurora = "radial-gradient(120% 90% at 12% 8%, rgb(198 255 31 / 0.38), transparent 55%), radial-gradient(110% 85% at 88% 92%, rgb(255 61 129 / 0.5), transparent 60%), linear-gradient(160deg, #0a0614, #1b132d)"
-        val nebula = "radial-gradient(75% 70% at 72% 30%, rgb(255 61 129 / 0.55), transparent 62%), radial-gradient(90% 90% at 18% 82%, rgb(127 211 255 / 0.38), transparent 62%), linear-gradient(200deg, #140d22, #07040e)"
-        put("users/fake/templates/writing", """{"owner": "fake", "name": "Writing", "description": "Obsidian, for notes and long-form writing.", "apps": ["obsidian"], "starter": true, "createdAt": "2026-09-01T00:00:00.000Z", "updatedAt": "2026-09-01T00:00:00.000Z"}""")
-        put("users/fake/templates/dev", """{"owner": "fake", "name": "Dev", "description": "WadBrowser and VS Code, for building things.", "apps": ["wadbrowser", "vscode"], "starter": true, "createdAt": "2026-09-01T00:00:00.000Z", "updatedAt": "2026-09-01T00:00:00.000Z"}""")
-        put("users/fake/extensions/vanua-academy-dev", """{"owner": "fake", "name": "VanuaAcademy Dev", "description": "", "templateId": "dev", "browserMode": "browser", "webapps": [{"id": "github", "name": "GitHub", "url": "https://github.com"}, {"id": "claude", "name": "Claude", "url": "https://claude.ai"}], "extensions": ["anthropic.claude-code"], "tools": ["firebase"], "autostart": [], "createdAt": "2026-09-19T00:00:00.000Z", "updatedAt": "2026-09-19T00:00:00.000Z"}""")
-        put("wadspaces/cosmic-bodybuilding", """{"version": 3, "owner": "fake", "sharedWith": [], "order": 1, "template": "writing", "customization": {"name": "Cosmic Bodybuilding", "description": "Writing Cosmic Bodybuilding.", "wallpaper": {"type": "gradient", "value": "$nebula"}, "projects": [{"id": "writing", "kind": "github", "repo": "HungGod/Writing", "as": "Writing"}], "secrets": {"bySlot": {}}}, "createdAt": "2026-09-22T00:00:00.000Z", "updatedAt": "2026-09-22T00:00:00.000Z"}""")
-        put("wadspaces/vanua-academy", """{"version": 3, "owner": "fake", "sharedWith": [], "order": 2, "template": "dev", "extensions": "vanua-academy-dev", "customization": {"name": "VanuaAcademy", "description": "Building Vanua Academy.", "wallpaper": {"type": "gradient", "value": "$aurora"}, "projects": [], "secrets": {"bySlot": {}}}, "createdAt": "2026-09-22T00:00:00.000Z", "updatedAt": "2026-09-22T00:00:00.000Z"}""")
         put("users/fake/github/repos", """{"login": "HungGod", "repos": [{"fullName": "HungGod/Writing", "name": "Writing", "private": true, "url": "", "defaultBranch": "main", "description": "Notes and drafts"}, {"fullName": "HungGod/VanuaAcademy", "name": "VanuaAcademy", "private": false, "url": "", "defaultBranch": "main", "description": "The academy's site"}, {"fullName": "HungGod/WadSpaces", "name": "WadSpaces", "private": false, "url": "", "defaultBranch": "main", "description": ""}]}""")
         // Design B's: IntelligenceQuest on the Surface (built there), Desk Lab on the Desk.
         put("wadspaces/intelligencequest", """{"version": 4, "owner": "fake", "sharedWith": [], "machine": "surface", "order": 1,
@@ -69,7 +62,7 @@ private class FakeServer : Http {
             "customization": {"name": "Desk Lab", "description": "Lives on the desk.", "wallpaper": {"type": "texture", "value": "marble"}, "projects": [], "secrets": {"bySlot": {}, "groups": []}},
             "createdAt": "2026-10-21T00:00:00.000Z", "updatedAt": "2026-10-21T00:00:00.000Z"}""")
         val now = Values.rfc3339(System.currentTimeMillis())
-        put("users/fake/machines/surface", """{"name": "Surface", "hostname": "wadspaces", "lastSeen": "$now", "tailnet": {"state": "running", "ips": ["$surface", "fd7a:115c:a1e0::a01:2b03"], "dnsName": "wadspaces-surface.tail1234.ts.net", "port": 8087, "listening": true}, "images": [{"layer": "base", "id": "b1"}, {"layer": "template:writing"}, {"layer": "template:dev"}, {"layer": "custom:vanua-academy-dev"}, {"layer": "set:9ee4c0aa0079", "id": "s1", "from": "b1"}]}""")
+        put("users/fake/machines/surface", """{"name": "Surface", "hostname": "wadspaces", "lastSeen": "$now", "tailnet": {"state": "running", "ips": ["$surface", "fd7a:115c:a1e0::a01:2b03"], "dnsName": "wadspaces-surface.tail1234.ts.net", "port": 8087, "listening": true}, "images": [{"layer": "base", "id": "b1"}, {"layer": "set:9ee4c0aa0079", "id": "s1", "from": "b1"}]}""")
         put("users/fake/machines/desk", """{"name": "Desk", "hostname": "desk", "lastSeen": "2026-10-15T08:00:00.000Z"}""")
     }
 
@@ -110,12 +103,12 @@ private class FakeServer : Http {
         fun built(id: String) = docs["built/$id"] != null
         return when {
             path == "/v1/remote/hello" -> ok(json.parseToJsonElement("""{"machine": "Surface", "machineId": "surface", "version": "0.1.0", "device": "Pixel 9", "trust": "trusted"}"""))
-            path == "/v1/remote/wadspaces" -> ok(JsonArray(listOf("cosmic-bodybuilding" to "Cosmic Bodybuilding", "vanua-academy" to "VanuaAcademy", "intelligencequest" to "IntelligenceQuest").map { (id, name) ->
+            path == "/v1/remote/wadspaces" -> ok(JsonArray(listOf("intelligencequest" to "IntelligenceQuest").map { (id, name) ->
                 buildJsonObject {
                     put("id", id)
                     put("name", name)
-                    put("layer", if (id == "intelligencequest") "set:9ee4c0aa0079" else "template:$id")
-                    put("built", id == "cosmic-bodybuilding" || id == "intelligencequest" || built(id))
+                    put("layer", "set:9ee4c0aa0079")
+                    put("built", true)
                     put("container", if (id in streamed) "running" else "exited")
                     if (id in streamed) {
                         put("streamed", true)
@@ -129,8 +122,8 @@ private class FakeServer : Http {
                 polls = 0
                 ok(buildJsonObject {
                     put("workspace", id)
-                    put("layer", "template:$id")
-                    if (id == "cosmic-bodybuilding" || built(id)) put("built", true) else {
+                    put("layer", "set:$id")
+                    if (id == "intelligencequest" || built(id)) put("built", true) else {
                         put("built", false)
                         put("buildId", "b-$id")
                     }
@@ -140,10 +133,9 @@ private class FakeServer : Http {
                 val id = path.removePrefix("/v1/remote/builds/b-")
                 polls++
                 val lines = listOf(
-                    "» Building the Dev template first", "STEP 1/6: FROM localhost/wadspaces-base:trixie",
-                    "STEP 2/6: RUN install-apps wadbrowser vscode", "STEP 3/6: COPY root/ /", "» Building VanuaAcademy Dev",
-                    "STEP 4/6: RUN code --install-extension anthropic.claude-code", "STEP 5/6: RUN install-tools firebase", "STEP 6/6: LABEL io.wadspaces.layer",
-                    "--> 0123abcd", "Successfully built",
+                    "» Packages: obsidian (here)", "» Stacking obsidian on the base", "STEP 1/3: FROM localhost/wadspaces-base:trixie",
+                    "STEP 2/3: COPY --from=pkg-obsidian / /", "STEP 3/3: LABEL io.wadspaces.layer", "» Assembling the set",
+                    "wadspaces-pkg assemble: 1 package", "--> 0123abcd", "Successfully built", "» Ready",
                 ).take(polls * 2)
                 val done = polls >= 5
                 if (done) docs["built/$id"] = JsonObject(emptyMap())

@@ -282,6 +282,28 @@ private class Got(
     var entry: BEntry? = null,
 )
 
+private val seq = java.util.concurrent.atomic.AtomicLong()
+
+/** An id like the board's (wad-board's uid): `<prefix>-<ms in base 36>-<n>`. */
+fun uid(prefix: String, now: Long = System.currentTimeMillis()): String =
+    "$prefix-${now.toString(36)}-${seq.getAndIncrement().toString(36)}"
+
+/** A web app's id from its name (wad-core's webapp_id): "Google Cloud" → "google-cloud". */
+fun webappId(name: String): String {
+    val b = StringBuilder()
+    var run = false
+    for (c in name.lowercase()) {
+        if (c in 'a'..'z' || c in '0'..'9') {
+            b.append(c)
+            run = false
+        } else if (!run) {
+            b.append('-')
+            run = true
+        }
+    }
+    return b.toString().trim('-').take(60).trim('-').ifEmpty { "app" }
+}
+
 /** wad-core's spec::slugify: lowercase, runs of anything else one `-`, 63 at most. */
 fun slugify(text: String): String {
     val b = StringBuilder()

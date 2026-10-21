@@ -36,7 +36,7 @@ class Graph(context: Context, val http: Http = UrlHttp(), store: SessionStore? =
     val account = Account(auth, firestore)
     val remote = RemoteWadd(http, auth::idToken)
     private fun read(context: Context, name: String) = context.assets.open(name).use { it.readBytes().decodeToString() }
-    val catalog: Catalog = Catalog.parse(read(context, "catalog.json"), read(context, "starters.json"), read(context, "wallpapers/presets.json"))
+    val catalog: Catalog = Catalog.parse(read(context, "catalog.json"))
 
     /** What naming a version 4 wadspace's set (and its templates) takes: the package graph. */
     val packages: Packages = Packages.parse(read(context, "packages.json"))

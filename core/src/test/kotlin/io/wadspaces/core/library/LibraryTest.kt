@@ -23,29 +23,6 @@ class LibraryTest {
     }
 
     @Test
-    fun aPlanIsOneCommitAsTheRulesWantIt() = runBlocking<Unit> {
-        val http = FakeHttp { HttpResponse(200, "{}") }
-        val plan = json.parseToJsonElement(
-            """{"templates": [{"id": "game-dev", "owner": "u1", "name": "Game Dev", "description": "", "apps": ["tiled"], "createdAt": "t", "updatedAt": "t"}],
-                "extensions": [], "deleted": [],
-                "wadspaces": [{"version": 3, "id": "stack-1", "owner": "u1", "order": 1, "template": "game-dev", "customization": {"name": "Q"}, "createdAt": "t", "updatedAt": "t"}]}""",
-        )
-        account(http).save(plan)
-        assertEquals(1, http.asked.size)
-        val r = http.asked[0]
-        assertEquals("POST" to "http://fs/v1/projects/demo/databases/(default)/documents:commit", r.method to r.url)
-        assertEquals("Bearer tok", r.headers["Authorization"])
-        val writes = json.parseToJsonElement(r.body!!).jsonObject["writes"]!!.jsonArray
-        val names = writes.map { it.jsonObject["update"]!!.jsonObject["name"].toString().trim('"').substringAfter("documents/") }
-        assertEquals(listOf("users/u1/templates/game-dev", "wadspaces/stack-1"), names)
-        val t = writes[0].jsonObject["update"]!!.jsonObject["fields"]!!.jsonObject
-        assertTrue("id" !in t && "owner" in t)
-        val w = writes[1].jsonObject["update"]!!.jsonObject["fields"]!!.jsonObject
-        assertEquals(json.parseToJsonElement("""{"integerValue": "3"}"""), w["version"])
-        assertEquals(json.parseToJsonElement("""{"arrayValue": {"values": []}}"""), w["sharedWith"])
-    }
-
-    @Test
     fun linkCodes() = runBlocking<Unit> {
         val http = FakeHttp { HttpResponse(200, "{}") }
         val code = account(http).createEnrollCode("Laptop")
@@ -59,7 +36,7 @@ class LibraryTest {
     fun designBsBoardFromTheLibraryAndItsPlanSaved() = runBlocking<Unit> {
         fun doc(text: String) = json.parseToJsonElement(text).jsonObject
         val lib = Library(
-            wadspaces = listOf(doc("""{"version": 3, "id": "old", "template": "dev"}""")),
+            reserved = listOf("old"),
             v4 = listOf(
                 doc("""{"version": 4, "id": "b", "machine": "m1", "order": 2, "customization": {"name": "B"}}"""),
                 doc("""{"version": 4, "id": "a", "machine": "m1", "order": 1, "customization": {"name": "A"}}"""),
@@ -89,14 +66,10 @@ class LibraryTest {
     }
 
     @Test
-    fun deletedOnesArentLive() {
-        val lib = Library(
-            wadspaces = listOf(
-                json.parseToJsonElement("""{"id": "b", "order": 2}""").jsonObject,
-                json.parseToJsonElement("""{"id": "gone", "order": 0, "deletedAt": "2026-10-01T00:00:00Z"}""").jsonObject,
-                json.parseToJsonElement("""{"id": "a", "order": 1, "deletedAt": null}""").jsonObject,
-            ),
-        )
-        assertEquals(listOf("a", "b"), lib.live().map { it["id"].toString().trim('"') })
+    fun deletedOnesArentAlive() {
+        fun doc(text: String) = json.parseToJsonElement(text).jsonObject
+        assertTrue(alive(doc("""{"id": "a", "deletedAt": null}""")))
+        assertTrue(alive(doc("""{"id": "b"}""")))
+        assertTrue(!alive(doc("""{"id": "gone", "deletedAt": "2026-10-01T00:00:00Z"}""")))
     }
 }
