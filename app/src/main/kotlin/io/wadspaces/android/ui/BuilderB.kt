@@ -90,6 +90,7 @@ import io.wadspaces.core.board.BTemplate
 import io.wadspaces.core.board.BWadspace
 import io.wadspaces.core.board.Board
 import io.wadspaces.core.board.Layers
+import io.wadspaces.core.board.NEW_NAME
 import io.wadspaces.core.board.Op
 import io.wadspaces.core.board.Pick
 import io.wadspaces.core.board.V4
@@ -184,6 +185,7 @@ private fun Tag(standing: String) {
         "update" -> "Update" to MaterialTheme.colorScheme.tertiary
         "building" -> "Building" to MaterialTheme.colorScheme.primary
         "never" -> "Not built" to MaterialTheme.colorScheme.secondary
+        "blank" -> "Not made yet" to MaterialTheme.colorScheme.onSurfaceVariant
         else -> "Not seen" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Text(
@@ -212,7 +214,6 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
     var picked by remember { mutableStateOf(setOf<String>()) }
     var justOne by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<String?>(null) }
-    var adding by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -229,6 +230,13 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
         val why = model.edit(*ops)
         if (why != null) say(why)
         return why == null
+    }
+
+    /** A blank wadspace made on the machine shown (an empty template to fill in), and opened. */
+    fun create() {
+        val m = here ?: return
+        val id = board.freeId(NEW_NAME)
+        if (act(Op.Create(m))) editing = id
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -270,8 +278,10 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
                         },
                     )
                 }
-                item {
-                    OutlinedButton(onClick = { adding = true }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), enabled = here != null) {
+                // A machine with none: a blank one to fill in, made when it's tapped.
+                if (row.isEmpty() && here != null) item { BlankCard(::create) }
+                if (row.isNotEmpty()) item {
+                    OutlinedButton(onClick = ::create, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), enabled = here != null) {
                         Icon(Icons.Filled.Add, null)
                         Spacer(Modifier.width(8.dp))
                         Text("New wadspace")
@@ -297,11 +307,33 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
     editing?.takeIf { board.get(it)?.deleted == false }?.let { id ->
         WadspaceSheet(model, id, close = { editing = null }, open = open, say = { say(it, undo = true) })
     }
-    if (adding && here != null) {
-        NewWadspaceSheet(model, close = { adding = false }) { app ->
-            val before = board.wadspaces.map { it.id }.toSet()
-            if (act(Op.Fresh(BPayload.CatalogApp(app), here))) editing = board.wadspaces.firstOrNull { it.id !in before }?.id
-            adding = false
+}
+
+/** A blank wadspace (an empty template, an empty customization): made, and saved, when it's tapped. */
+@Composable
+private fun BlankCard(tap: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    val blue = MaterialTheme.colorScheme.tertiary
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clickable(onClick = tap),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+    ) {
+        Box(Modifier.fillMaxWidth().height(76.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+            Text("Its background, projects and keys", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(blue.copy(alpha = 0.08f))
+                    .border(1.dp, blue.copy(alpha = 0.45f), RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Text("Template", color = blue, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                Text("No apps yet: tap to pick them", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(NEW_NAME, Modifier.weight(1f), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Tag("blank")
+            }
         }
     }
 }
@@ -464,28 +496,6 @@ private fun templateOf(p: BPayload): String? = when (p) {
     is BPayload.App -> p.template
     is BPayload.Extra -> p.template
     else -> null
-}
-
-/** A new wadspace on the machine shown, from its first app. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun NewWadspaceSheet(model: AppModel, close: () -> Unit, pick: (String) -> Unit) {
-    ModalBottomSheet(onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
-            Text("A new wadspace", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Pick its first app: more go in afterwards.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(12.dp))
-            model.g.catalog.apps.forEach { a ->
-                Row(Modifier.fillMaxWidth().clickable { pick(a.id) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(a.name, fontWeight = FontWeight.SemiBold)
-                        Text(a.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(Icons.Filled.Add, null)
-                }
-            }
-        }
-    }
 }
 
 /** A wadspace open: what's in it, the apps to add, its customization; Build, Open, Delete. */

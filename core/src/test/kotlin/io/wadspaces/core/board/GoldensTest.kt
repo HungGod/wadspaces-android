@@ -83,7 +83,7 @@ class GoldensTest {
     fun wadCoresCases() = check("core-goldens.json", 55)
 
     @Test
-    fun designBsBoardCases() = check("b-goldens.json", 12)
+    fun designBsBoardCases() = check("b-goldens.json", 13)
 
     @Test
     fun thePhonesPlanNewCases() = check("phone.json", 13)

@@ -16,6 +16,11 @@ import kotlinx.serialization.json.longOrNull
 
 private const val UNDO_STEPS = 40
 
+/** A new wadspace's name, and its one empty template's id and name (Op.Create: to fill in). */
+const val NEW_NAME = "New wadspace"
+const val BLANK_TEMPLATE = "template"
+private const val BLANK_TEMPLATE_NAME = "Template"
+
 /** A field as a number, or null. */
 private fun num(v: JsonElement?, k: String): Long? = (field(v, k) as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
 
@@ -192,6 +197,9 @@ sealed interface Pick {
 sealed interface Op {
     data class Drop(val payload: BPayload, val into: String, val at: Where = Where()) : Op
     data class Fresh(val payload: BPayload, val machine: String, val before: String? = null) : Op
+
+    /** A new wadspace on `machine` from nothing, to fill in: one empty template and its name. */
+    data class Create(val machine: String) : Op
     data class CopyTo(val ids: List<String>, val machine: String) : Op
     data class Delete(val picks: List<Pick>) : Op
     data class Restore(val ws: String) : Op
@@ -215,6 +223,7 @@ sealed interface Op {
         fun of(v: JsonElement?): Op = when (val k = s(v, "op")) {
             "drop" -> Drop(BPayload.of(field(v, "payload")), s(v, "into"), Where.of(field(v, "where")))
             "fresh" -> Fresh(BPayload.of(field(v, "payload")), s(v, "machine"), sOrNull(v, "before"))
+            "create" -> Create(s(v, "machine"))
             "copyTo" -> CopyTo(strs(v, "ids"), s(v, "machine"))
             "delete" -> Delete(arrOf(v, "picks").map(Pick::of))
             "restore" -> Restore(s(v, "ws"))
@@ -367,6 +376,7 @@ class Board(
         when (op) {
             is Op.Drop -> drop(op.payload, op.into, op.at, g)
             is Op.Fresh -> fresh(op.payload, op.machine, op.before, g)
+            is Op.Create -> create(op.machine)
             is Op.CopyTo -> op.ids.forEach { fresh(BPayload.Wadspace(it), op.machine, null, g) }
             is Op.Delete -> delete(op.picks)
             is Op.Restore -> must(op.ws).deletedAt = null
@@ -563,18 +573,32 @@ class Board(
     }
 
     /** A new wadspace on `machine` from what's dragged; its id. */
+    /** The id a new wadspace called `name` gets: free among the board's (deleted ones too) and the reserved. */
+    fun freeId(name: String): String = free(slugify(name), wadspaces.map { it.id } + reserved)
+
+    /** Where a new wadspace goes: before `before`, else after its machine's last. */
+    private fun place(machine: String, before: String?): Int =
+        before?.let { b -> wadspaces.indexOfFirst { it.id == b }.takeIf { it >= 0 } }
+            ?: (wadspaces.indexOfLast { it.machine == machine }.takeIf { it >= 0 }?.plus(1) ?: wadspaces.size)
+
+    /** A new wadspace on `machine` from nothing; its id. */
+    private fun create(machine: String): String {
+        val id = freeId(NEW_NAME)
+        val t = BTemplate(BLANK_TEMPLATE, BLANK_TEMPLATE_NAME)
+        wadspaces.add(place(machine, null), BWadspace(id = id, machine = machine, templates = mutableListOf(t), customization = linkedMapOf("name" to str(NEW_NAME))))
+        return id
+    }
+
     private fun fresh(p: BPayload, machine: String, before: String?, g: Packages): String {
         val from = p.source?.let { must(it).copy() }
         val whole = p is BPayload.Wadspace || (p is BPayload.Bucket && p.pile)
         val name = when {
-            from == null -> "New wadspace"
+            from == null -> NEW_NAME
             whole && from.machine != machine -> from.name
             else -> copyName(from.name, row(machine).map { it.name })
         }
-        val id = free(slugify(name), wadspaces.map { it.id } + reserved)
-        val at = before?.let { b -> wadspaces.indexOfFirst { it.id == b }.takeIf { it >= 0 } }
-            ?: (wadspaces.indexOfLast { it.machine == machine }.takeIf { it >= 0 }?.plus(1) ?: wadspaces.size)
-        wadspaces.add(at, BWadspace(id = id, owner = from?.owner ?: "", machine = machine, customization = linkedMapOf("name" to str(name))))
+        val id = freeId(name)
+        wadspaces.add(place(machine, before), BWadspace(id = id, owner = from?.owner ?: "", machine = machine, customization = linkedMapOf("name" to str(name))))
         val got = carry(p, id)
         take(must(id), got, null, Where(newTemplate = true), g)
         return id
