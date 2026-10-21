@@ -4,7 +4,8 @@
 # (packages.json: each app's package and what packages need, for naming a
 # version 4 wadspace's set), the goldens its core is checked against (the
 # board's, design B's board's, wad-core's, the phone's planNew cases), the
-# Builder's wallpapers and textures, and the account's Firebase settings
+# Builder's wallpapers and textures, the catalog's icons as PNGs (the
+# Builder's desktop preview), and the account's Firebase settings
 # (into the gitignored wadspaces.properties). SOURCE says which commit
 # they're from.
 set -euo pipefail
@@ -22,6 +23,7 @@ cp "$src/fixtures/board/b.json" "$fixtures/b-goldens.json"
 (cd "$src" && cargo xtask packages graph) > "$assets/packages.json"
 cp "$assets/packages.json" "$fixtures/packages.json"
 (cd "$src" && cargo run -q -p wad-wallpaper --example presets -- "$assets/wallpapers")
+(cd "$src" && cargo xtask phone-icons "$assets/icons")
 commit=$(git -C "$src" rev-parse --short HEAD)
 dirty=$(git -C "$src" status --porcelain -- crates/wad-core crates/wad-board fixtures crates/wad-wallpaper xtask | head -1)
 echo "${commit}${dirty:+ (with changes)}" > "$here/core/src/test/resources/fixtures/SOURCE"

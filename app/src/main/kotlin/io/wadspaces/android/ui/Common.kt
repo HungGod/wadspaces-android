@@ -43,6 +43,21 @@ fun textureBitmap(id: String): ImageBitmap? {
     }
 }
 
+private val iconBitmaps = HashMap<String, ImageBitmap?>()
+
+/** An icon synced from wadspaces (icons/<name>.png: app-<id>, folder, ext-<id>), decoded once; null if there's none. */
+@Composable
+fun iconBitmap(name: String): ImageBitmap? {
+    val ctx = LocalContext.current
+    return remember(name) {
+        synchronized(iconBitmaps) {
+            iconBitmaps.getOrPut(name) {
+                runCatching { ctx.assets.open("icons/$name.png").use { BitmapFactory.decodeStream(it)?.asImageBitmap() } }.getOrNull()
+            }
+        }
+    }
+}
+
 /**
  * A wadspace's wallpaper: a texture (version 4's, in the theme's tone), a
  * preset's picture, a colour, a picture of its own, else the brand's colours

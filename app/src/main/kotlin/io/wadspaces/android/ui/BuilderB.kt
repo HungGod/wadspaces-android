@@ -1,6 +1,7 @@
 package io.wadspaces.android.ui
 
 import android.content.ClipData
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -28,16 +29,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,7 +46,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
@@ -59,14 +58,15 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +82,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.wadspaces.android.AppModel
+import io.wadspaces.android.BuildRun
 import io.wadspaces.android.LibState
 import io.wadspaces.android.MachineView
 import io.wadspaces.core.board.BExtra
@@ -107,8 +108,13 @@ import kotlinx.serialization.json.JsonPrimitive
 // machines along the top. A long press drags a wadspace (onto a machine:
 // a copy there) or a template and those under it ("Just this one": only
 // it) onto another wadspace (a copy) or its own (moved to the end). A tap
-// opens the wadspace's sheet: what's in it, the apps to add, and its
-// customization. Select picks wadspaces, for Build and Delete.
+// opens the wadspace full screen: its stack and the others' to bring parts
+// in from (BuilderStack.kt), the apps to add and its customization, those
+// two over its desktop as it will look (MockDesktop.kt). Select picks
+// wadspaces, for Build and Delete.
+//
+// The board changes in place (the same wadspaces, edited), so what draws a
+// part of it takes the board's `rev` too: a new one draws it again.
 
 /** Web apps worth offering even when no wadspace has them (the client's). */
 private val COMMON = listOf(
@@ -119,19 +125,19 @@ private val COMMON = listOf(
     BExtra("youtube", "YouTube", "https://youtube.com"),
 )
 
-private val TEXTURE_NAMES = mapOf(
+internal val TEXTURE_NAMES = mapOf(
     "carbon" to "Carbon", "marble" to "Marble", "wood" to "Woodgrain", "contour" to "Contour", "grid" to "Grid",
     "terrazzo" to "Terrazzo", "honeycomb" to "Honeycomb", "seigaiha" to "Seigaiha", "brushed" to "Brushed metal",
     "camo" to "Camo", "stars" to "Stars", "halftone" to "Halftone",
 )
 
-private fun textureOf(w: BWadspace): String? =
+internal fun textureOf(w: BWadspace): String? =
     (w.customization["wallpaper"] as? JsonObject)?.takeIf { (it["type"] as? JsonPrimitive)?.content == "texture" }
         ?.let { (it["value"] as? JsonPrimitive)?.content }
 
-private fun projectsOf(w: BWadspace): List<JsonObject> = (w.customization["projects"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+internal fun projectsOf(w: BWadspace): List<JsonObject> = (w.customization["projects"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
 
-private fun text(o: JsonObject?, k: String) = (o?.get(k) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: ""
+internal fun text(o: JsonObject?, k: String) = (o?.get(k) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: ""
 
 /** A drag on the board carries core's payload as its local state. */
 private fun transfer(p: BPayload, label: String) = DragAndDropTransferData(ClipData.newPlainText("wadspaces", label), localState = p)
@@ -141,7 +147,7 @@ private fun payloadOf(e: DragAndDropEvent): BPayload? = e.toAndroidDragEvent().l
 /** Long-pressed, it's dragged (what `payload` gives); tapped, `onTap`. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Modifier.boardSource(label: String, payload: () -> BPayload?, onTap: () -> Unit): Modifier {
+internal fun Modifier.boardSource(label: String, payload: () -> BPayload?, onTap: () -> Unit): Modifier {
     val p by rememberUpdatedState(payload)
     val tap by rememberUpdatedState(onTap)
     val l by rememberUpdatedState(label)
@@ -156,7 +162,7 @@ private fun Modifier.boardSource(label: String, payload: () -> BPayload?, onTap:
 /** Takes what `accepts` says it does; `hot` while something it takes is over it. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Modifier.boardTarget(accepts: (BPayload) -> Boolean, onHot: (Boolean) -> Unit, drop: (BPayload) -> Unit): Modifier {
+internal fun Modifier.boardTarget(accepts: (BPayload) -> Boolean, onHot: (Boolean) -> Unit, drop: (BPayload) -> Unit): Modifier {
     val a by rememberUpdatedState(accepts)
     val d by rememberUpdatedState(drop)
     val h by rememberUpdatedState(onHot)
@@ -175,6 +181,21 @@ private fun Modifier.boardTarget(accepts: (BPayload) -> Boolean, onHot: (Boolean
         }
     }
     return dragAndDropTarget(shouldStartDragAndDrop = { e -> payloadOf(e)?.let(a) == true }, target = target)
+}
+
+/** Edits made from the open wadspace: why one couldn't be is said; `done` says what was, with Undo. */
+internal class Edits(private val model: AppModel, private val say: (String, Boolean) -> Unit) {
+    fun edit(vararg ops: Op): Boolean {
+        val why = model.edit(*ops)
+        if (why != null) say(why, false)
+        return why == null
+    }
+
+    fun done(text: String, vararg ops: Op): Boolean {
+        val made = edit(*ops)
+        if (made) say(text, true)
+        return made
+    }
 }
 
 /** How a wadspace stands on its machine, in a word. */
@@ -206,8 +227,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
     val libState by model.library.collectAsState()
     val state = st ?: return Centered(if (libState is LibState.Failed) "Couldn't read your library." else "Reading your wadspaces…")
     val board = state.board
-    // Builds starting and ending change how wadspaces stand: read, so it's drawn again.
-    @Suppress("UNUSED_VARIABLE") val drawn = state.rev + runs.size
+    val rev = state.rev
     var shown by remember { mutableStateOf<String?>(null) }
     val here = shown?.takeIf { s -> board.machines.any { it.id == s } } ?: board.machines.firstOrNull()?.id
     var selecting by remember { mutableStateOf(false) }
@@ -239,8 +259,14 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
         if (act(Op.Create(m))) editing = id
     }
 
+    val ed = remember { Edits(model) { text, undo -> say(text, undo) } }
+    val opened = editing?.let(board::get)?.takeIf { !it.deleted }
+
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
+        if (opened != null) {
+            BackHandler { editing = null }
+            WadspaceEditor(model, board, rev, opened, runs[opened.id], ed, close = { editing = null }, open = open)
+        } else Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Builder", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 TextButton(onClick = { model.edit(Op.Undo) }, enabled = board.canUndo) { Text("Undo") }
@@ -255,7 +281,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
                     TextButton(onClick = model::saveBoard) { Text("Retry") }
                 }
             }
-            MachineStrip(model, board, machines, here, picked) { m -> shown = m }
+            MachineStrip(model, board, rev, machines, here, picked) { m -> shown = m }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(justOne, { justOne = !justOne }, { Text("Just this one") })
                 Text(
@@ -268,7 +294,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = if (selecting) 96.dp else 24.dp)) {
                 items(row, key = { it.id }) { w ->
                     WadspaceCardB(
-                        model, w, model.standing(w), selecting, w.id in picked, justOne,
+                        model, w, rev, model.standing(w), selecting, w.id in picked, justOne,
                         tap = {
                             if (selecting) picked = if (w.id in picked) picked - w.id else picked + w.id else editing = w.id
                         },
@@ -289,7 +315,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
                 }
             }
         }
-        if (selecting && picked.isNotEmpty()) {
+        if (opened == null && selecting && picked.isNotEmpty()) {
             Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), tonalElevation = 6.dp, shadowElevation = 6.dp) {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { picked.forEach(model::buildOnItsMachine) }, Modifier.weight(1f)) { Text("Build (${picked.size})") }
@@ -301,11 +327,7 @@ fun BuilderBScreen(model: AppModel, open: (String) -> Unit) {
                 }
             }
         }
-        SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).padding(bottom = if (selecting && picked.isNotEmpty()) 80.dp else 8.dp))
-    }
-
-    editing?.takeIf { board.get(it)?.deleted == false }?.let { id ->
-        WadspaceSheet(model, id, close = { editing = null }, open = open, say = { say(it, undo = true) })
+        SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).padding(bottom = if (opened == null && selecting && picked.isNotEmpty()) 80.dp else 8.dp))
     }
 }
 
@@ -340,7 +362,7 @@ private fun BlankCard(tap: () -> Unit) {
 
 /** The machines along the top: tap one for its wadspaces; drop a wadspace on one to copy it there (picked ones too), anything else for a new one there. */
 @Composable
-private fun MachineStrip(model: AppModel, board: Board, views: List<MachineView>, here: String?, picked: Set<String>, show: (String) -> Unit) {
+private fun MachineStrip(model: AppModel, board: Board, @Suppress("UNUSED_PARAMETER") rev: Int, views: List<MachineView>, here: String?, picked: Set<String>, show: (String) -> Unit) {
     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(board.machines, key = { it.id }) { m ->
             var hot by remember { mutableStateOf(false) }
@@ -407,6 +429,7 @@ private fun MachineStrip(model: AppModel, board: Board, views: List<MachineView>
 private fun WadspaceCardB(
     model: AppModel,
     w: BWadspace,
+    rev: Int,
     standing: String,
     selecting: Boolean,
     picked: Boolean,
@@ -445,7 +468,7 @@ private fun WadspaceCardB(
         }
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             w.templates.forEachIndexed { i, t ->
-                TemplateRowB(model, w, t, i, justOne, selecting, tap)
+                TemplateRowB(model, w, rev, t, i, justOne, selecting, tap)
             }
             if (w.templates.isEmpty()) {
                 Text("No templates: tap it, then add apps", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -465,7 +488,7 @@ private fun WadspaceCardB(
 /** A template: long-press drags it and those under it (or just it). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TemplateRowB(model: AppModel, w: BWadspace, t: BTemplate, i: Int, justOne: Boolean, selecting: Boolean, tap: () -> Unit) {
+private fun TemplateRowB(model: AppModel, w: BWadspace, @Suppress("UNUSED_PARAMETER") rev: Int, t: BTemplate, i: Int, justOne: Boolean, selecting: Boolean, tap: () -> Unit) {
     var hot by remember { mutableStateOf(false) }
     val blue = MaterialTheme.colorScheme.tertiary
     Column(
@@ -492,137 +515,149 @@ private fun TemplateRowB(model: AppModel, w: BWadspace, t: BTemplate, i: Int, ju
     }
 }
 
-private fun templateOf(p: BPayload): String? = when (p) {
+internal fun templateOf(p: BPayload): String? = when (p) {
     is BPayload.App -> p.template
     is BPayload.Extra -> p.template
     else -> null
 }
 
-/** A wadspace open: what's in it, the apps to add, its customization; Build, Open, Delete. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** A wadspace open, full screen: its stack and the others' (Wadspaces), the apps to add, its customization; Build, Open, Delete. */
 @Composable
-private fun WadspaceSheet(model: AppModel, id: String, close: () -> Unit, open: (String) -> Unit, say: (String) -> Unit) {
-    val st by model.board.collectAsState()
-    val runs by model.runs.collectAsState()
+private fun WadspaceEditor(
+    model: AppModel,
+    board: Board,
+    rev: Int,
+    w: BWadspace,
+    run: BuildRun?,
+    ed: Edits,
+    close: () -> Unit,
+    open: (String) -> Unit,
+) {
     val libState by model.library.collectAsState()
-    val board = st?.board ?: return
-    val w = board.get(id) ?: return
-    var tab by remember { mutableStateOf(0) }
-    val run = runs[id]
-    ModalBottomSheet(onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(w.name.ifEmpty { "Untitled" }, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Tag(model.standing(w))
-            }
-            Text("On ${board.machines.firstOrNull { it.id == w.machine }?.name ?: w.machine}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { model.buildOnItsMachine(id) }, enabled = run == null || run.finished) { Text("Build") }
-                OutlinedButton(onClick = {
-                    close()
-                    open(id)
-                }) { Text("Open") }
-                TextButton(onClick = {
-                    if (model.edit(Op.Delete(listOf(Pick.Wadspace(id)))) == null) {
-                        close()
-                        say("Deleted ${w.name}")
-                    }
-                }) { Text("Delete") }
-            }
-            run?.let { r ->
-                Text(
-                    r.error ?: r.lines.lastOrNull() ?: r.status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (r.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            TabRow(selectedTabIndex = tab) {
-                listOf("In it", "Apps", "Customization").forEachIndexed { i, label -> Tab(tab == i, { tab = i }, text = { Text(label) }) }
-            }
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(top = 12.dp)) {
-                when (tab) {
-                    0 -> InIt(model, w)
-                    1 -> AppsTab(model, board, w)
-                    else -> CustomTab(model, w, (libState as? LibState.Ready)?.lib)
-                }
-            }
-        }
-    }
-}
-
-/** Its templates: rename, take out, and each app's and extra's ✕. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun InIt(model: AppModel, w: BWadspace) {
-    var renaming by remember { mutableStateOf<BTemplate?>(null) }
-    if (w.templates.isEmpty()) Text("Nothing yet: add apps from Apps.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    w.templates.forEach { t ->
-        Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f)).padding(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(t.name, Modifier.weight(1f), color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.SemiBold)
-                IconButton(onClick = { renaming = t }) { Icon(Icons.Filled.Edit, "Rename ${t.name}") }
-                IconButton(onClick = { model.edit(Op.Delete(listOf(Pick.Template(w.id, t.id)))) }) { Icon(Icons.Filled.Close, "Take ${t.name} out") }
-            }
-            t.apps.forEach { e ->
+    var tab by rememberSaveable(w.id) { mutableIntStateOf(0) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to the board") }
+            Column(Modifier.weight(1f)) {
+                Text(w.name.ifEmpty { "Untitled" }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(model.g.packages.appName(e.app), Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                    TextButton(onClick = { model.edit(Op.RemoveApp(w.id, t.id, e.app)) }) { Text("Remove") }
+                    Tag(model.standing(w))
+                    Text(
+                        "on ${board.machines.firstOrNull { it.id == w.machine }?.name?.ifEmpty { null } ?: w.machine}",
+                        Modifier.padding(start = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                if (e.extras.isNotEmpty()) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        e.extras.forEach { x ->
-                            AssistChip(
-                                onClick = { model.edit(Op.RemoveExtra(w.id, t.id, e.app, x.id)) },
-                                label = { Text(extraName(model, e.app, x)) },
-                                trailingIcon = { Icon(Icons.Filled.Close, "Take it out", Modifier.size(14.dp)) },
-                            )
-                        }
-                    }
-                }
+            }
+            TextButton(onClick = { model.edit(Op.Undo) }, enabled = board.canUndo) { Text("Undo") }
+        }
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { model.buildOnItsMachine(w.id) }, enabled = run == null || run.finished) { Text("Build") }
+            OutlinedButton(onClick = {
+                close()
+                open(w.id)
+            }) { Text("Open") }
+            TextButton(onClick = { if (ed.done("Deleted ${w.name}", Op.Delete(listOf(Pick.Wadspace(w.id))))) close() }) { Text("Delete") }
+        }
+        run?.let { r ->
+            Text(
+                r.error ?: r.lines.lastOrNull() ?: r.status,
+                Modifier.padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (r.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        TabRow(selectedTabIndex = tab) {
+            listOf("Wadspaces", "Apps", "Customization").forEachIndexed { i, label -> Tab(tab == i, { tab = i }, text = { Text(label) }) }
+        }
+        if (tab == 0) {
+            StackTab(model, board, rev, w, ed, Modifier.weight(1f))
+        } else {
+            MockDesktop(model, w, rev, Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
+                if (tab == 1) AppsTab(model, board, rev, w, ed) else CustomTab(model, rev, w, (libState as? LibState.Ready)?.lib)
             }
         }
     }
-    renaming?.let { t ->
-        var name by remember(t.id) { mutableStateOf(t.name) }
-        AlertDialog(
-            onDismissRequest = { renaming = null },
-            title = { Text("Rename the template") },
-            text = { OutlinedTextField(name, { name = it }, singleLine = true) },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (name.isNotBlank() && name != t.name) model.edit(Op.RenameTemplate(w.id, t.id, name.trim()))
-                    renaming = null
-                }) { Text("Rename") }
-            },
-            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
-        )
-    }
 }
 
-private fun extraName(model: AppModel, app: String, x: BExtra): String = when (app) {
+internal fun extraName(model: AppModel, app: String, x: BExtra): String = when (app) {
     "vscode" -> model.g.catalog.extensions.firstOrNull { it.id == x.id }?.name ?: x.id
     V4.TERMINAL -> model.g.catalog.tools.firstOrNull { it.id == x.id }?.name ?: x.id
     else -> x.name ?: x.id
 }
 
-/** The catalog's apps, each with what it takes: tap to put it in (an app in a template of its own, an extra where its app is). */
+/**
+ * The catalog's apps, each with what it takes. A tap puts an app in (into
+ * the template picked above them: the empty one if there is, else a
+ * template of its own) and its + turns to a check; a tap on the check
+ * takes it out. An extra goes where its app is.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AppsTab(model: AppModel, board: Board, w: BWadspace) {
-    val has = V4.appsOf(w.json()).associate { text(it, "app") to (it["extras"] as? JsonArray)?.map { x -> text(x as? JsonObject, "id") }.orEmpty() }
+private fun AppsTab(model: AppModel, board: Board, rev: Int, w: BWadspace, ed: Edits) {
+    val has = remember(w.id, rev) {
+        V4.appsOf(w.json()).associate { text(it, "app") to (it["extras"] as? JsonArray)?.map { x -> text(x as? JsonObject, "id") }.orEmpty() }
+    }
     var site by remember { mutableStateOf("") }
+    // null: the empty template if there's one, else one of its own; "": one of its own; else that template.
+    var choice by remember(w.id) { mutableStateOf<String?>(null) }
+    val into: String? = when (val c = choice) {
+        null -> w.templates.firstOrNull { it.apps.isEmpty() }?.id
+        "" -> null
+        else -> c.takeIf { w.templates.any { t -> t.id == c } }
+    }
     val webApps = (board.wadspaces.flatMap { it.templates }.flatMap { it.apps }.filter { it.app == "wadbrowser" }.flatMap { it.extras } + COMMON).distinctBy { it.id }
     val cats = model.g.catalog.apps.map { it.category }.distinct()
-    fun add(p: BPayload) = model.edit(Op.Drop(p, w.id))
+    val where = if (into != null) Where(template = into) else Where(newTemplate = true)
+    fun addApp(app: String) = ed.edit(Op.Drop(BPayload.CatalogApp(app), w.id, where))
+    fun addExtra(app: String, x: BExtra) = ed.edit(Op.Drop(BPayload.CatalogExtra(app, x), w.id, if (app in has) Where() else where))
+    fun takeOut(app: String) {
+        val ops = w.templates.filter { t -> t.apps.any { it.app == app } }.map { Op.RemoveApp(w.id, it.id, app) }
+        ed.done("Took ${model.g.packages.appName(app)} out", *ops.toTypedArray())
+    }
+    fun takeOut(app: String, x: BExtra, name: String) {
+        val ops = w.templates.filter { t -> t.apps.any { e -> e.app == app && e.extras.any { it.id == x.id } } }.map { Op.RemoveExtra(w.id, it.id, app, x.id) }
+        ed.done("Took $name out", *ops.toTypedArray())
+    }
+
+    Text("ADD TO", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        w.templates.forEach { t -> FilterChip(into == t.id, { choice = t.id }, { Text(t.name) }) }
+        FilterChip(into == null, { choice = "" }, { Text("A template of its own") })
+    }
     cats.forEach { cat ->
         Text(cat.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
         model.g.catalog.apps.filter { it.category == cat }.forEach { a ->
-            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(10.dp)) {
-                Row(Modifier.fillMaxWidth().clickable { add(BPayload.CatalogApp(a.id)) }, verticalAlignment = Alignment.CenterVertically) {
-                    Text(a.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                    if (a.id in has) Text("In it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) else Icon(Icons.Filled.Add, "Add ${a.name}")
+            val inIt = a.id in has
+            Column(
+                Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp))
+                    .background(if (inIt) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(10.dp),
+            ) {
+                Row(Modifier.fillMaxWidth().clickable { if (inIt) takeOut(a.id) else addApp(a.id) }, verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(32.dp)) { iconBitmap("app-${a.id}")?.let { Image(it, null, Modifier.fillMaxSize()) } }
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text(a.name, fontWeight = FontWeight.SemiBold)
+                        Text(a.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (inIt) {
+                        Icon(
+                            Icons.Filled.Check,
+                            "In it: tap to take ${a.name} out",
+                            Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).padding(4.dp),
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
+                        Icon(
+                            Icons.Filled.Add,
+                            "Add ${a.name}",
+                            Modifier.size(28.dp).clip(CircleShape).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape).padding(4.dp),
+                        )
+                    }
                 }
                 val offered: List<Pair<BExtra, String>> = when (a.id) {
                     "vscode" -> model.g.catalog.extensions.map { BExtra(it.id) to it.name }
@@ -631,10 +666,17 @@ private fun AppsTab(model: AppModel, board: Board, w: BWadspace) {
                     else -> emptyList()
                 }
                 if (offered.isNotEmpty()) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         offered.forEach { (x, name) ->
-                            val inIt = has[a.id]?.contains(x.id) == true
-                            FilterChip(inIt, { if (!inIt) add(BPayload.CatalogExtra(a.id, x)) }, { Text(name) })
+                            val on = has[a.id]?.contains(x.id) == true
+                            FilterChip(
+                                on,
+                                { if (on) takeOut(a.id, x, name) else addExtra(a.id, x) },
+                                { Text(name) },
+                                leadingIcon = if (on) {
+                                    { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+                                } else null,
+                            )
                         }
                     }
                 }
@@ -644,20 +686,20 @@ private fun AppsTab(model: AppModel, board: Board, w: BWadspace) {
                             site, { site = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("Add a site: notion.so") },
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
-                                siteWebApp(site)?.let { add(BPayload.CatalogExtra("wadbrowser", it)) }
+                                siteWebApp(site)?.let { addExtra("wadbrowser", it) }
                                 site = ""
                             }),
                         )
                         IconButton(onClick = {
-                            siteWebApp(site)?.let { add(BPayload.CatalogExtra("wadbrowser", it)) }
+                            siteWebApp(site)?.let { addExtra("wadbrowser", it) }
                             site = ""
                         }) { Icon(Icons.Filled.Add, "Add the site") }
                     }
-                    if ("wadbrowser" in has) {
+                    if (inIt) {
                         val focus = w.templates.flatMap { it.apps }.any { it.app == "wadbrowser" && it.mode == "focus" }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Focus mode: its web apps, no address bar", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            Switch(focus, { on -> model.edit(Op.SetMode(w.id, if (on) "focus" else "browser")) })
+                            Switch(focus, { on -> ed.edit(Op.SetMode(w.id, if (on) "focus" else "browser")) })
                         }
                     }
                 }
@@ -680,7 +722,7 @@ private fun siteWebApp(text: String): BExtra? {
 /** Its title, description, background (a texture), projects. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CustomTab(model: AppModel, w: BWadspace, lib: Library?) {
+private fun CustomTab(model: AppModel, @Suppress("UNUSED_PARAMETER") rev: Int, w: BWadspace, lib: Library?) {
     var title by remember(w.id) { mutableStateOf(w.name) }
     var desc by remember(w.id) { mutableStateOf(text(JsonObject(w.customization), "description")) }
     OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true,
