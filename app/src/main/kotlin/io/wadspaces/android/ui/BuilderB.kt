@@ -98,10 +98,12 @@ import io.wadspaces.core.board.V4
 import io.wadspaces.core.board.Where
 import io.wadspaces.core.builder.Builder
 import io.wadspaces.core.library.Library
+import io.wadspaces.core.library.Repo
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 
 // Design B's Builder on the phone (wadspaces' ui-mockup-pieces B-Buckets,
 // as the WadSpaces Client has it): one machine's version 4 wadspaces, the
@@ -140,6 +142,26 @@ internal fun textureOf(w: BWadspace): String? =
 internal fun projectsOf(w: BWadspace): List<JsonObject> = (w.customization["projects"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
 
 internal fun text(o: JsonObject?, k: String) = (o?.get(k) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: ""
+
+/** A GitHub project cloned on its machine (in ~/GitHub) and mounted, not cloned inside. */
+internal fun mountedRepo(p: JsonObject) = text(p, "kind") == "github" && (p["mounted"] as? JsonPrimitive)?.booleanOrNull == true
+
+/** What a project is, in words (the client's project_text). */
+internal fun projectText(p: JsonObject): String = when {
+    mountedRepo(p) -> "${text(p, "repo")} cloned on its machine in ~/GitHub, mounted · changes save there"
+    text(p, "kind") == "github" -> "cloned from ${text(p, "repo")}"
+    text(p, "kind") == "mount" -> {
+        val path = ((p["source"] as? JsonObject)?.get("paths") as? JsonArray)?.firstOrNull()?.let { (it as? JsonPrimitive)?.content }
+        "mounted from ${path ?: "its machine"} · changes save to that machine"
+    }
+    else -> "copied in from a machine"
+}
+
+/** `want`, or want-2, want-3… if another project's at ~/Desktop/<it> (the client's free_as). */
+private fun freeAs(want: String, projects: List<JsonObject>): String {
+    val taken = projects.map { text(it, "as").lowercase() }
+    return generateSequence(1) { it + 1 }.map { if (it == 1) want else "$want-$it" }.first { it.lowercase() !in taken }
+}
 
 /** A drag on the board carries core's payload as its local state. */
 private fun transfer(p: BPayload, label: String) = DragAndDropTransferData(ClipData.newPlainText("wadspaces", label), localState = p)
@@ -780,24 +802,64 @@ private fun CustomTab(model: AppModel, rev: Int, w: BWadspace, lib: Library?) {
 
     Text("PROJECTS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
     val projects = remember(rev, w.id) { projectsOf(w) }
-    projects.filter { text(it, "kind") != "github" }.forEach { p ->
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text(p, "as"), Modifier.weight(1f))
+    if (projects.isEmpty()) {
+        Text("None yet: clone or mount a GitHub repository.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    projects.forEach { p ->
+        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(24.dp)) { iconBitmap("folder")?.let { Image(it, null, Modifier.fillMaxSize()) } }
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(text(p, "as"), fontWeight = FontWeight.SemiBold)
+                Text(projectText(p), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
             TextButton(onClick = { model.edit(Op.ToggleProject(w.id, p)) }) { Text("Take out") }
         }
     }
+
+    Text("YOUR GITHUB REPOSITORIES", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp, bottom = 2.dp))
+    Text(
+        "Clone puts its files inside the wadspace. Mount clones it on the wadspace's machine, in ~/GitHub, and mounts it: changes save there, and its wadspaces there share that clone.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(bottom = 4.dp),
+    )
     val repos = lib?.repos ?: emptyList()
     if (repos.isEmpty()) Text("Your GitHub repositories show here once a machine has read them.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        repos.forEach { r ->
-            val have = projects.firstOrNull { text(it, "kind") == "github" && text(it, "repo").equals(r.fullName, ignoreCase = true) }
-            FilterChip(have != null, {
-                val p = have ?: JsonObject(mapOf(
-                    "id" to JsonPrimitive(Builder.uid("project")), "kind" to JsonPrimitive("github"),
-                    "repo" to JsonPrimitive(r.fullName), "as" to JsonPrimitive(r.name),
-                ))
-                model.edit(Op.ToggleProject(w.id, p))
-            }, { Text(r.name) })
+    fun add(r: Repo, mounted: Boolean) {
+        val p = buildMap {
+            put("id", JsonPrimitive(Builder.uid("project")))
+            put("kind", JsonPrimitive("github"))
+            put("repo", JsonPrimitive(r.fullName))
+            put("as", JsonPrimitive(freeAs(r.name, projects)))
+            if (mounted) put("mounted", JsonPrimitive(true))
+        }
+        model.edit(Op.ToggleProject(w.id, JsonObject(p)))
+    }
+    repos.forEach { r ->
+        val have = projects.firstOrNull { text(it, "kind") == "github" && text(it, "repo").equals(r.fullName, ignoreCase = true) }
+        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(r.name, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (r.private) {
+                        Text("private", Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (r.description.isNotEmpty()) {
+                    Text(r.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (have != null) {
+                Text(
+                    if (mountedRepo(have)) "Mounted" else "Cloned",
+                    Modifier.padding(horizontal = 12.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                TextButton(onClick = { add(r, false) }) { Text("Clone") }
+                TextButton(onClick = { add(r, true) }) { Text("Mount") }
+            }
         }
     }
     Text(

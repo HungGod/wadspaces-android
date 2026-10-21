@@ -312,7 +312,7 @@ private fun CustomsBucket(rev: Int, w: BWadspace, ed: Edits, pull: (BPayload) ->
         }
         Text("Projects", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (projects.isEmpty()) {
-            Text("None: add GitHub repositories in Customization", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("None: clone or mount GitHub repositories in Customization", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             projects.forEach { p ->
@@ -320,7 +320,7 @@ private fun CustomsBucket(rev: Int, w: BWadspace, ed: Edits, pull: (BPayload) ->
                 InputChip(
                     selected = false,
                     onClick = { ed.done("Took $name out", Op.Delete(listOf(Pick.Project(w.id, text(p, "id"))))) },
-                    label = { Text(name) },
+                    label = { Text(if (mountedRepo(p)) "$name · mounted" else name) },
                     leadingIcon = { iconBitmap("folder")?.let { Image(it, null, Modifier.size(18.dp)) } },
                     trailingIcon = { Icon(Icons.Filled.Close, "Take $name out", Modifier.size(14.dp)) },
                 )
