@@ -208,7 +208,8 @@ sealed interface Op {
     data class RenameTemplate(val ws: String, val template: String, val name: String) : Op
     data class RemoveApp(val ws: String, val template: String, val app: String) : Op
     data class RemoveExtra(val ws: String, val template: String, val app: String, val id: String) : Op
-    data class SetMode(val ws: String, val mode: String) : Op
+    /** WadBrowser's mode in `template` (null: wherever it is in the wadspace). The top template with WadBrowser decides (V4.appsOf). */
+    data class SetMode(val ws: String, val mode: String, val template: String? = null) : Op
     data class SetBackground(val ws: String, val texture: String?) : Op
     data class ToggleProject(val ws: String, val project: JsonElement) : Op
     data class SetKey(val ws: String, val slot: String, val key: JsonElement?) : Op
@@ -232,7 +233,7 @@ sealed interface Op {
             "renameTemplate" -> RenameTemplate(s(v, "ws"), s(v, "template"), s(v, "name"))
             "removeApp" -> RemoveApp(s(v, "ws"), s(v, "template"), s(v, "app"))
             "removeExtra" -> RemoveExtra(s(v, "ws"), s(v, "template"), s(v, "app"), s(v, "id"))
-            "setMode" -> SetMode(s(v, "ws"), s(v, "mode"))
+            "setMode" -> SetMode(s(v, "ws"), s(v, "mode"), sOrNull(v, "template"))
             "setBackground" -> SetBackground(s(v, "ws"), sOrNull(v, "texture"))
             "toggleProject" -> ToggleProject(s(v, "ws"), field(v, "project") ?: JsonNull)
             "setKey" -> SetKey(s(v, "ws"), s(v, "slot"), opt(v, "key"))
@@ -387,7 +388,14 @@ class Board(
             is Op.RemoveExtra -> template(must(op.ws), op.template).apps.firstOrNull { it.app == op.app }?.extras?.removeAll { it.id == op.id }
             is Op.SetMode -> {
                 if (op.mode != "browser" && op.mode != "focus") fail("WadBrowser has no mode ${op.mode}")
-                for (t in must(op.ws).templates) for (e in t.apps) if (e.app == "wadbrowser") e.mode = op.mode.takeIf { it == "focus" }
+                val w = must(op.ws)
+                op.template?.let { id ->
+                    val t = template(w, id)
+                    if (t.apps.none { it.app == "wadbrowser" }) fail("${t.name} has no WadBrowser")
+                }
+                for (t in w.templates) if (op.template == null || t.id == op.template) {
+                    for (e in t.apps) if (e.app == "wadbrowser") e.mode = op.mode.takeIf { it == "focus" }
+                }
             }
             is Op.SetBackground -> {
                 op.texture?.let { if (it !in V4.TEXTURES) fail("there's no texture $it") }

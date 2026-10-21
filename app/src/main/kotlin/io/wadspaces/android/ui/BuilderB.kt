@@ -114,7 +114,9 @@ import kotlinx.serialization.json.JsonPrimitive
 // wadspaces, for Build and Delete.
 //
 // The board changes in place (the same wadspaces, edited), so what draws a
-// part of it takes the board's `rev` too: a new one draws it again.
+// part of it takes the board's `rev` too and reads it (Compose skips a part
+// whose parameters haven't changed, and doesn't look at ones it never reads):
+// a new one draws it again.
 
 /** Web apps worth offering even when no wadspace has them (the client's). */
 private val COMMON = listOf(
@@ -362,13 +364,14 @@ private fun BlankCard(tap: () -> Unit) {
 
 /** The machines along the top: tap one for its wadspaces; drop a wadspace on one to copy it there (picked ones too), anything else for a new one there. */
 @Composable
-private fun MachineStrip(model: AppModel, board: Board, @Suppress("UNUSED_PARAMETER") rev: Int, views: List<MachineView>, here: String?, picked: Set<String>, show: (String) -> Unit) {
+private fun MachineStrip(model: AppModel, board: Board, rev: Int, views: List<MachineView>, here: String?, picked: Set<String>, show: (String) -> Unit) {
     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(board.machines, key = { it.id }) { m ->
             var hot by remember { mutableStateOf(false) }
             val v = views.firstOrNull { it.machine.id == m.id }
-            val row = board.row(m.id)
-            val copies = picked.filter { id -> board.get(id)?.machine != m.id }
+            // Read again with the board (`rev`): the same, edited, board isn't news to the list.
+            val row = remember(rev, m.id) { board.row(m.id) }
+            val copies = remember(rev, m.id, picked) { picked.filter { id -> board.get(id)?.machine != m.id } }
             val whole = { p: BPayload -> p is BPayload.Wadspace }
             Card(
                 Modifier.width(210.dp)
@@ -488,7 +491,7 @@ private fun WadspaceCardB(
 /** A template: long-press drags it and those under it (or just it). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TemplateRowB(model: AppModel, w: BWadspace, @Suppress("UNUSED_PARAMETER") rev: Int, t: BTemplate, i: Int, justOne: Boolean, selecting: Boolean, tap: () -> Unit) {
+private fun TemplateRowB(model: AppModel, w: BWadspace, rev: Int, t: BTemplate, i: Int, justOne: Boolean, selecting: Boolean, tap: () -> Unit) {
     var hot by remember { mutableStateOf(false) }
     val blue = MaterialTheme.colorScheme.tertiary
     Column(
@@ -506,8 +509,8 @@ private fun TemplateRowB(model: AppModel, w: BWadspace, @Suppress("UNUSED_PARAME
     ) {
         Text(t.name, color = blue, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
         Text(
-            t.apps.joinToString(", ") { e ->
-                model.g.packages.appName(e.app) + if (e.extras.isNotEmpty()) " +${e.extras.size}" else ""
+            remember(rev, t.id) {
+                t.apps.joinToString(", ") { e -> model.g.packages.appName(e.app) + if (e.extras.isNotEmpty()) " +${e.extras.size}" else "" }
             }.ifEmpty { "No apps yet" },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -696,10 +699,22 @@ private fun AppsTab(model: AppModel, board: Board, rev: Int, w: BWadspace, ed: E
                         }) { Icon(Icons.Filled.Add, "Add the site") }
                     }
                     if (inIt) {
-                        val focus = w.templates.flatMap { it.apps }.any { it.app == "wadbrowser" && it.mode == "focus" }
+                        // The top template with WadBrowser decides: the switch shows and sets its.
+                        val withIt = w.templates.filter { t -> t.apps.any { it.app == "wadbrowser" } }
+                        val top = withIt.firstOrNull()
+                        val focus = top?.apps?.firstOrNull { it.app == "wadbrowser" }?.mode == "focus"
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Focus mode: its web apps, no address bar", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            Switch(focus, { on -> ed.edit(Op.SetMode(w.id, if (on) "focus" else "browser")) })
+                            Column(Modifier.weight(1f)) {
+                                Text("Focus mode: its web apps, no address bar", style = MaterialTheme.typography.bodySmall)
+                                if (top != null && withIt.size > 1) {
+                                    Text(
+                                        "Set in ${top.name}, the highest template with WadBrowser",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Switch(focus, { on -> ed.edit(Op.SetMode(w.id, if (on) "focus" else "browser", top?.id)) })
                         }
                     }
                 }
@@ -722,7 +737,7 @@ private fun siteWebApp(text: String): BExtra? {
 /** Its title, description, background (a texture), projects. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CustomTab(model: AppModel, @Suppress("UNUSED_PARAMETER") rev: Int, w: BWadspace, lib: Library?) {
+private fun CustomTab(model: AppModel, rev: Int, w: BWadspace, lib: Library?) {
     var title by remember(w.id) { mutableStateOf(w.name) }
     var desc by remember(w.id) { mutableStateOf(text(JsonObject(w.customization), "description")) }
     OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true,
@@ -743,7 +758,7 @@ private fun CustomTab(model: AppModel, @Suppress("UNUSED_PARAMETER") rev: Int, w
     }
 
     Text("BACKGROUND", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
-    val now = textureOf(w)
+    val now = remember(rev, w.id) { textureOf(w) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         V4.TEXTURES.forEach { id ->
             val bmp = textureBitmap(id)
@@ -764,7 +779,7 @@ private fun CustomTab(model: AppModel, @Suppress("UNUSED_PARAMETER") rev: Int, w
     }
 
     Text("PROJECTS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
-    val projects = projectsOf(w)
+    val projects = remember(rev, w.id) { projectsOf(w) }
     projects.filter { text(it, "kind") != "github" }.forEach { p ->
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text(p, "as"), Modifier.weight(1f))

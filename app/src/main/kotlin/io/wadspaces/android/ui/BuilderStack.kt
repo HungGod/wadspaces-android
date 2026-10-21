@@ -25,13 +25,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,7 +71,8 @@ import kotlinx.serialization.json.JsonObject
 // wadspace's Customizations and Templates to edit, and above them the other
 // wadspaces' stacks, every part of which comes in here: a tap adds it, a
 // long press drags it to its place (a template onto a template goes before
-// it, an app into it).
+// it, an app into it). Templates move up and down by their arrows: where
+// they disagree (WadBrowser's mode), the higher one wins.
 
 /** What dragging or tapping `p` brings in, in words. */
 private fun labelOf(model: AppModel, board: Board, p: BPayload): String {
@@ -165,13 +166,18 @@ private fun AddMark(tint: Color, size: Dp = 16.dp) = Icon(Icons.Filled.Add, null
 /** Another wadspace's stack: all of it, its customizations or templates, each template, app, background and project. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SourceStack(model: AppModel, board: Board, @Suppress("UNUSED_PARAMETER") rev: Int, o: BWadspace, pull: (BPayload) -> Unit) {
+private fun SourceStack(model: AppModel, board: Board, rev: Int, o: BWadspace, pull: (BPayload) -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
     val blue = MaterialTheme.colorScheme.tertiary
-    val texture = textureOf(o)
+    // As of `rev`: Compose skips a part whose parameters it doesn't read, and `o` is the same object, edited.
+    val texture = remember(rev, o.id) { textureOf(o) }
+    val projects = remember(rev, o.id) { projectsOf(o) }
+    val templates = remember(rev, o.id) { o.templates.map { it.copy() } }
     val bmp = texture?.let { textureBitmap(it) }
     val name = o.name.ifEmpty { "Untitled" }
-    Card(Modifier.width(220.dp).fillMaxHeight(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+    // A Column, not a Card: its parts are drawn again with the board (a Card
+    // keeps its content while `o` is the same wadspace, edited).
+    Column(Modifier.width(220.dp).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
         Box(
             Modifier.fillMaxWidth().height(46.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest)
                 .part(name, BPayload.Wadspace(o.id), pull),
@@ -196,7 +202,6 @@ private fun SourceStack(model: AppModel, board: Board, @Suppress("UNUSED_PARAMET
         }
         Column(Modifier.verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SourceBucket("Customizations", accent, BPayload.Bucket(o.id, Which.Customs), pull) {
-                val projects = projectsOf(o)
                 if (texture == null && projects.isEmpty()) {
                     Text("Nothing yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -214,8 +219,8 @@ private fun SourceStack(model: AppModel, board: Board, @Suppress("UNUSED_PARAMET
                 }
             }
             SourceBucket("Templates", accent, BPayload.Bucket(o.id, Which.Templates), pull) {
-                if (o.templates.isEmpty()) Text("None yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                o.templates.forEach { t ->
+                if (templates.isEmpty()) Text("None yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                templates.forEach { t ->
                     Column(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(blue.copy(alpha = 0.08f))
                             .border(1.dp, blue.copy(alpha = 0.45f), RoundedCornerShape(8.dp)).padding(6.dp),
@@ -242,7 +247,7 @@ private fun SourceStack(model: AppModel, board: Board, @Suppress("UNUSED_PARAMET
 
 /** A bucket of another wadspace's: its name (a tap brings all of it in) over its parts. */
 @Composable
-private fun SourceBucket(title: String, color: Color, payload: BPayload, pull: (BPayload) -> Unit, parts: @Composable () -> Unit) {
+private inline fun SourceBucket(title: String, color: Color, payload: BPayload, noinline pull: (BPayload) -> Unit, parts: @Composable () -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(10.dp)).padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -271,12 +276,13 @@ private fun PartChip(label: String, color: Color, modifier: Modifier, picture: @
 /** This wadspace's Customizations: its background, projects and keys; takes another's (or parts of them) dropped on it. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CustomsBucket(@Suppress("UNUSED_PARAMETER") rev: Int, w: BWadspace, ed: Edits, pull: (BPayload) -> Unit) {
+private fun CustomsBucket(rev: Int, w: BWadspace, ed: Edits, pull: (BPayload) -> Unit) {
     var hot by remember { mutableStateOf(false) }
     val accent = MaterialTheme.colorScheme.primary
     val shape = RoundedCornerShape(14.dp)
-    val texture = textureOf(w)
-    val projects = projectsOf(w)
+    // As of `rev` (see SourceStack).
+    val texture = remember(rev, w.id) { textureOf(w) }
+    val projects = remember(rev, w.id) { projectsOf(w) }
     Column(
         Modifier.fillMaxWidth().clip(shape).background(if (hot) accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainer)
             .border(1.5.dp, accent.copy(alpha = 0.6f), shape)
@@ -320,7 +326,7 @@ private fun CustomsBucket(@Suppress("UNUSED_PARAMETER") rev: Int, w: BWadspace, 
                 )
             }
         }
-        val keys = keyCount(w)
+        val keys = remember(rev, w.id) { keyCount(w) }
         Text(
             when (keys) {
                 0 -> "No keys yet: they're set on the machine"
@@ -351,8 +357,11 @@ private fun TemplatesBucket(model: AppModel, rev: Int, w: BWadspace, ed: Edits, 
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("TEMPLATES", color = accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        if (w.templates.size > 1) {
+            Text("Where they disagree, the higher one wins", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         w.templates.forEachIndexed { i, t -> TemplateEditCard(model, rev, w, t, i, ed, pull, rename = { renaming = t }) }
-        NewTemplateSlot(w, pull)
+        NewTemplateSlot(w.templates.isEmpty(), pull)
     }
     renaming?.let { t ->
         var name by remember(t.id) { mutableStateOf(t.name) }
@@ -376,7 +385,7 @@ private fun TemplatesBucket(model: AppModel, rev: Int, w: BWadspace, ed: Edits, 
 @Composable
 private fun TemplateEditCard(
     model: AppModel,
-    @Suppress("UNUSED_PARAMETER") rev: Int,
+    rev: Int,
     w: BWadspace,
     t: BTemplate,
     i: Int,
@@ -387,6 +396,9 @@ private fun TemplateEditCard(
     var hot by remember { mutableStateOf(false) }
     val blue = MaterialTheme.colorScheme.tertiary
     val shape = RoundedCornerShape(10.dp)
+    // As of `rev` (see SourceStack); `above`: a higher template with WadBrowser, whose mode is used.
+    val apps = remember(rev, t.id) { t.apps.map { it.copy() } }
+    val above = remember(rev, t.id) { w.templates.takeWhile { it.id != t.id }.firstOrNull { x -> x.apps.any { it.app == "wadbrowser" } }?.name }
     Column(
         Modifier.fillMaxWidth().clip(shape).background(if (hot) blue.copy(alpha = 0.2f) else blue.copy(alpha = 0.08f))
             .border(1.dp, blue.copy(alpha = 0.45f), shape)
@@ -407,12 +419,23 @@ private fun TemplateEditCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(t.name, Modifier.weight(1f), color = blue, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Up or down a place (its id stays): the top one wins where templates disagree.
+            IconButton(onClick = { ed.edit(Op.Drop(BPayload.Templates(w.id, listOf(t.id)), w.id, Where(at = i - 1))) }, Modifier.size(36.dp), enabled = i > 0) {
+                Icon(Icons.Filled.KeyboardArrowUp, "Move ${t.name} up")
+            }
+            IconButton(
+                onClick = { ed.edit(Op.Drop(BPayload.Templates(w.id, listOf(t.id)), w.id, Where(at = i + 2))) },
+                Modifier.size(36.dp),
+                enabled = i < w.templates.size - 1,
+            ) {
+                Icon(Icons.Filled.KeyboardArrowDown, "Move ${t.name} down")
+            }
             IconButton(onClick = rename, Modifier.size(36.dp)) { Icon(Icons.Filled.Edit, "Rename ${t.name}", Modifier.size(18.dp)) }
             IconButton(onClick = { ed.done("Took ${t.name} out", Op.Delete(listOf(Pick.Template(w.id, t.id)))) }, Modifier.size(36.dp)) {
                 Icon(Icons.Filled.Close, "Take ${t.name} out", Modifier.size(20.dp))
             }
         }
-        if (t.apps.isEmpty()) {
+        if (apps.isEmpty()) {
             Text(
                 "No apps: add them from Apps, or drop one here",
                 Modifier.padding(end = 10.dp),
@@ -420,7 +443,7 @@ private fun TemplateEditCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        t.apps.forEach { e ->
+        apps.forEach { e ->
             val name = model.g.packages.appName(e.app)
             Row(
                 Modifier.fillMaxWidth().boardSource(name, payload = { BPayload.App(w.id, t.id, e.app) }, onTap = {}),
@@ -428,13 +451,11 @@ private fun TemplateEditCard(
             ) {
                 Box(Modifier.size(24.dp)) { iconBitmap("app-${e.app}")?.let { Image(it, null, Modifier.fillMaxSize()) } }
                 Text(name, Modifier.weight(1f).padding(start = 8.dp), fontWeight = FontWeight.Medium)
-                if (e.app == "wadbrowser" && e.mode == "focus") {
-                    Text("Focus", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
                 IconButton(onClick = { ed.done("Took $name out", Op.RemoveApp(w.id, t.id, e.app)) }, Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Close, "Take $name out", Modifier.size(18.dp))
                 }
             }
+            if (e.app == "wadbrowser") ModeRow(w.id, t.id, e.mode == "focus", above, ed)
             if (e.extras.isNotEmpty()) {
                 FlowRow(Modifier.padding(start = 32.dp, end = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     e.extras.forEach { x ->
@@ -452,9 +473,33 @@ private fun TemplateEditCard(
     }
 }
 
+/** A template's WadBrowser mode; when a higher template (`above`) has WadBrowser too, that one's is used. */
+@Composable
+private fun ModeRow(ws: String, template: String, focus: Boolean, above: String?, ed: Edits) {
+    Row(Modifier.padding(start = 32.dp, end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        FilterChip(
+            focus,
+            { ed.edit(Op.SetMode(ws, if (focus) "browser" else "focus", template)) },
+            { Text("Focus mode") },
+            leadingIcon = if (focus) {
+                { Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) }
+            } else null,
+        )
+        if (above != null) {
+            Text(
+                "Not used: $above is higher",
+                Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
 /** Where an app dropped gets a template of its own. */
 @Composable
-private fun NewTemplateSlot(w: BWadspace, pull: (BPayload, Where) -> Unit) {
+private fun NewTemplateSlot(empty: Boolean, pull: (BPayload, Where) -> Unit) {
     var hot by remember { mutableStateOf(false) }
     val blue = MaterialTheme.colorScheme.tertiary
     val shape = RoundedCornerShape(10.dp)
@@ -469,7 +514,7 @@ private fun NewTemplateSlot(w: BWadspace, pull: (BPayload, Where) -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            if (w.templates.isEmpty()) "Drop an app here, or add one from Apps" else "Drop an app here for a template of its own",
+            if (empty) "Drop an app here, or add one from Apps" else "Drop an app here for a template of its own",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

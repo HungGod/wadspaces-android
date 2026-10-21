@@ -191,15 +191,19 @@ object V4 {
         return null
     }
 
-    /** Every app in it once, where it first is, with all the extras its templates give it. */
+    /**
+     * Every app in it once, where it first is, with all the extras its
+     * templates give it. Where templates disagree, the top one wins: the
+     * first template with an app gives its mode (none there is WadBrowser's
+     * address bar, whatever a lower one says).
+     */
     fun appsOf(w: JsonElement): List<JsonObject> {
-        data class A(val app: String, var mode: String?, val extras: MutableList<JsonElement>)
+        data class A(val app: String, val mode: String?, val extras: MutableList<JsonElement>)
         val apps = mutableListOf<A>()
         for (t in arrOf(w, "templates")) for (e in arrOf(t, "apps")) {
             val app = s(e, "app")
             if (app.isEmpty()) continue
-            val a = apps.firstOrNull { it.app == app } ?: A(app, null, mutableListOf()).also { apps += it }
-            if (a.mode == null) a.mode = sOrNull(e, "mode")
+            val a = apps.firstOrNull { it.app == app } ?: A(app, sOrNull(e, "mode"), mutableListOf()).also { apps += it }
             for (x in arrOf(e, "extras")) if (a.extras.none { s(it, "id") == s(x, "id") }) a.extras += x
         }
         return apps.map { obj("app" to str(it.app), "mode" to it.mode?.let(::str), "extras" to JsonArray(it.extras)) }
