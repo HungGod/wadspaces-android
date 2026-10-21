@@ -81,8 +81,10 @@ data class Machine(
     /** "running", "needsLogin", ... ("off" or none: not on the tailnet). */
     val tailnet: String,
     val target: Target?,
-    /** The layers built there ("template:<id>", "custom:<id>"), as its heartbeat lists its images. */
+    /** The layers built there ("template:<id>", "custom:<id>", "set:<key>", "base"), as its heartbeat lists its images. */
     val layers: Set<String> = emptySet(),
+    /** Its images' rows (layer, id, from, …): what V4.state reads. */
+    val images: List<JsonObject> = emptyList(),
     /** Its screen, when it has one (a stream defaults to the same). */
     val screen: Screen? = null,
 ) {
@@ -105,6 +107,7 @@ data class Machine(
                 tailnet = t.str("state").ifEmpty { "off" },
                 target = ip?.takeIf { t.str("state") == "running" }?.let { Target(it, port) },
                 layers = (heartbeat["images"] as? JsonArray)?.map { it.str("layer") }?.filter { it.isNotEmpty() }?.toSet() ?: emptySet(),
+                images = (heartbeat["images"] as? JsonArray)?.filterIsInstance<JsonObject>() ?: emptyList(),
                 screen = Screen(num("width").toInt(), num("height").toInt(), num("scale").takeIf { it > 0 } ?: 1.0)
                     .takeIf { it.width > 0 && it.height > 0 },
             )

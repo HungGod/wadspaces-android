@@ -36,6 +36,8 @@ class RemoteWaddTest {
         assertEquals(Triple("Surface", true, "running"), Triple(m.name, m.online, m.tailnet))
         assertEquals(Target("100.101.102.103", 8087), m.target)
         assertEquals(setOf("template:dev", "base"), m.layers)
+        // Its image rows, as V4.state reads them.
+        assertEquals(listOf("template:dev", "base"), m.images.map { it.str("layer") })
         assertEquals(Screen(1500, 1000, 2.0), m.screen)
         assertEquals(3000 to 2000, m.screen!!.pixelWidth to m.screen!!.pixelHeight)
         assertEquals("http://[fd7a:115c:a1e0::1]:8087", Target("fd7a:115c:a1e0::1", 8087).base)

@@ -1,6 +1,7 @@
 package io.wadspaces.android
 
 import android.content.Context
+import io.wadspaces.core.board.Packages
 import io.wadspaces.core.builder.Catalog
 import io.wadspaces.core.firebase.Auth
 import io.wadspaces.core.firebase.FirebaseConfig
@@ -26,7 +27,7 @@ class FileStore(private val file: File) : SessionStore {
     }
 }
 
-/** What the app is made of: the account, wadd's remote API, the catalog. */
+/** What the app is made of: the account, wadd's remote API, the catalog and package graph. */
 class Graph(context: Context, val http: Http = UrlHttp(), store: SessionStore? = null) {
     val config = FirebaseConfig(BuildConfig.FIREBASE_API_KEY, BuildConfig.FIREBASE_PROJECT_ID, BuildConfig.FIREBASE_AUTH_DOMAIN)
     val configured get() = config.apiKey.isNotEmpty() && config.projectId.isNotEmpty()
@@ -34,8 +35,9 @@ class Graph(context: Context, val http: Http = UrlHttp(), store: SessionStore? =
     val firestore = Firestore(config, http, auth::idToken)
     val account = Account(auth, firestore)
     val remote = RemoteWadd(http, auth::idToken)
-    val catalog: Catalog = context.assets.let { a ->
-        fun read(name: String) = a.open(name).use { it.readBytes().decodeToString() }
-        Catalog.parse(read("catalog.json"), read("starters.json"), read("wallpapers/presets.json"))
-    }
+    private fun read(context: Context, name: String) = context.assets.open(name).use { it.readBytes().decodeToString() }
+    val catalog: Catalog = Catalog.parse(read(context, "catalog.json"), read(context, "starters.json"), read(context, "wallpapers/presets.json"))
+
+    /** What naming a version 4 wadspace's set (and its templates) takes: the package graph. */
+    val packages: Packages = Packages.parse(read(context, "packages.json"))
 }

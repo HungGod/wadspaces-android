@@ -1,5 +1,9 @@
 package io.wadspaces.core.library
 
+import io.wadspaces.core.board.BMachine
+import io.wadspaces.core.board.BWadspace
+import io.wadspaces.core.board.Board
+import io.wadspaces.core.board.V4
 import io.wadspaces.core.firebase.Auth
 import io.wadspaces.core.firebase.Firestore
 import io.wadspaces.core.firebase.Values
@@ -23,14 +27,18 @@ data class Repo(val fullName: String, val name: String, val private: Boolean, va
 /**
  * The person's library from their account (wad-account's library.rs): the
  * Builder's documents, their wadspaces (deleted ones too: new ids skip
- * them), their machines' heartbeats, and their GitHub repos.
+ * them; version 3's and design B's version 4, kept apart), their machines'
+ * heartbeats, and their GitHub repos.
  */
 data class Library(
     val templates: List<JsonObject> = emptyList(),
     val extensions: List<JsonObject> = emptyList(),
     /** Extensions layers from before they had that name. */
     val customizations: List<JsonObject> = emptyList(),
+    /** Version 3 wadspaces (a template chain and an Extensions layer). */
     val wadspaces: List<JsonObject> = emptyList(),
+    /** Version 4 wadspaces (design B's: each its own templates, on one machine). */
+    val v4: List<JsonObject> = emptyList(),
     val machines: List<JsonObject> = emptyList(),
     val repos: List<Repo> = emptyList(),
 ) {
@@ -55,6 +63,14 @@ data class Library(
     fun live(): List<JsonObject> = wadspaces
         .filter(::alive)
         .sortedWith(compareBy({ (it["order"] as? JsonPrimitive)?.content?.toDoubleOrNull() ?: 0.0 }, { it.str("createdAt") }))
+
+    /** Design B's board: the machines and version 4 wadspaces, each machine's row in order; version 3's ids reserved. */
+    fun board(machines: List<BMachine>, now: String): Board = Board(
+        machines = machines,
+        wadspaces = v4.map(BWadspace::of).sortedWith(compareBy({ it.order }, { it.id })).toMutableList(),
+        now = now,
+        reserved = wadspaces.map { it.str("id") },
+    )
 }
 
 /** Not deleted: no `deletedAt`, or a falsy one (as the board reads it). */
@@ -87,11 +103,13 @@ class Account(val auth: Auth, val firestore: Firestore) {
         val machines = async { firestore.list("users/$uid/machines") }
         val wadspaces = async { firestore.queryRoot(owned) }
         val repos = async { runCatching { firestore.get("users/$uid/github/repos") }.getOrNull() }
+        val (v4, v3) = wadspaces.await().partition(V4::isV4)
         Library(
             templates = templates.await(),
             extensions = extensions.await(),
             customizations = customizations.await(),
-            wadspaces = wadspaces.await(),
+            wadspaces = v3,
+            v4 = v4,
             machines = machines.await(),
             repos = repos.await()?.let(::reposOf) ?: emptyList(),
         )
@@ -114,6 +132,19 @@ class Account(val auth: Auth, val firestore: Firestore) {
         (plan["wadspaces"] as? JsonArray)?.forEach {
             val data = strip(it) + mapOf("owner" to JsonPrimitive(uid), "sharedWith" to (it["sharedWith"] as? JsonArray ?: JsonArray(emptyList())))
             writes += Write("wadspaces/${it.str("id")}", JsonObject(data))
+        }
+        if (writes.isNotEmpty()) firestore.commit(writes)
+    }
+
+    /**
+     * Design B's board's documents (its plan), all or none: each the owner's,
+     * shared with no one.
+     */
+    suspend fun saveWadspaces(docs: List<JsonObject>) {
+        val uid = uid()
+        val writes = docs.map {
+            val data = JsonObject(it - "id") + mapOf("owner" to JsonPrimitive(uid), "sharedWith" to (it["sharedWith"] as? JsonArray ?: JsonArray(emptyList())))
+            Write("wadspaces/${it.str("id")}", JsonObject(data))
         }
         if (writes.isNotEmpty()) firestore.commit(writes)
     }

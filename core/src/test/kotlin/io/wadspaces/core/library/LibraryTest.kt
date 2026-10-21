@@ -1,5 +1,6 @@
 package io.wadspaces.core.library
 
+import io.wadspaces.core.board.BMachine
 import io.wadspaces.core.firebase.Auth
 import io.wadspaces.core.firebase.FakeHttp
 import io.wadspaces.core.firebase.Firestore
@@ -52,6 +53,28 @@ class LibraryTest {
         val w = json.parseToJsonElement(http.asked[0].body!!).jsonObject["writes"]!!.jsonArray[0].jsonObject
         assertTrue(w["update"].toString().contains("enrollCodes/$code"))
         assertEquals("createdAt", (w["updateTransforms"] as JsonArray)[0].jsonObject["fieldPath"].toString().trim('"'))
+    }
+
+    @Test
+    fun designBsBoardFromTheLibraryAndItsPlanSaved() = runBlocking<Unit> {
+        fun doc(text: String) = json.parseToJsonElement(text).jsonObject
+        val lib = Library(
+            wadspaces = listOf(doc("""{"version": 3, "id": "old", "template": "dev"}""")),
+            v4 = listOf(
+                doc("""{"version": 4, "id": "b", "machine": "m1", "order": 2, "customization": {"name": "B"}}"""),
+                doc("""{"version": 4, "id": "a", "machine": "m1", "order": 1, "customization": {"name": "A"}}"""),
+            ),
+        )
+        val board = lib.board(listOf(BMachine("m1", "Surface")), "t")
+        assertEquals(listOf("a", "b"), board.row("m1").map { it.id })
+        assertEquals(listOf("old"), board.reserved)
+        val http = FakeHttp { HttpResponse(200, "{}") }
+        account(http).saveWadspaces(listOf(board.wadspaces[0].json()))
+        val w = json.parseToJsonElement(http.asked[0].body!!).jsonObject["writes"]!!.jsonArray[0].jsonObject["update"]!!.jsonObject
+        assertTrue(w["name"].toString().endsWith("wadspaces/a\""), w["name"].toString())
+        val fields = w["fields"]!!.jsonObject
+        assertTrue("id" !in fields)
+        assertEquals(json.parseToJsonElement("""{"stringValue": "u1"}"""), fields["owner"])
     }
 
     @Test

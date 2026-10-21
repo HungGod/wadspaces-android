@@ -1,0 +1,87 @@
+{
+  "apps": {
+    "wadbrowser": null,
+    "vscode": "vscode",
+    "obsidian": "obsidian",
+    "tiled": "tiled",
+    "libresprite": "libresprite",
+    "audacity": "audacity",
+    "lmms": "apt-lmms",
+    "krita": "krita",
+    "openshot": "openshot",
+    "steam": "steam",
+    "dolphin": "dolphin",
+    "obs": "apt-obs",
+    "terminal": null
+  },
+  "names": {
+    "wadbrowser": "WadBrowser",
+    "vscode": "VS Code",
+    "obsidian": "Obsidian",
+    "tiled": "Tiled",
+    "libresprite": "LibreSprite",
+    "audacity": "Audacity",
+    "lmms": "LMMS",
+    "krita": "Krita",
+    "openshot": "OpenShot",
+    "steam": "Steam",
+    "dolphin": "Dolphin",
+    "obs": "OBS Studio",
+    "terminal": "Command line"
+  },
+  "tools": [
+    "cpp",
+    "python",
+    "nodejs",
+    "firebase",
+    "gcloud",
+    "rust",
+    "go",
+    "android"
+  ],
+  "features": [
+    "git",
+    "cpp",
+    "python",
+    "nodejs",
+    "firebase",
+    "gcloud",
+    "rust",
+    "go",
+    "android",
+    "electron-deps",
+    "vscode",
+    "claude-code",
+    "chrome",
+    "tiled",
+    "android-studio",
+    "hplip",
+    "obsidian",
+    "libresprite",
+    "audacity",
+    "krita",
+    "openshot",
+    "steam",
+    "dolphin"
+  ],
+  "needs": {
+    "chrome": [
+      "electron-deps"
+    ],
+    "claude-code": [
+      "nodejs"
+    ],
+    "firebase": [
+      "nodejs"
+    ],
+    "obsidian": [
+      "electron-deps"
+    ],
+    "rust": [
+      "cpp"
+    ],
+    "vscode": [
+      "electron-deps"
+    ]
+  }
+}

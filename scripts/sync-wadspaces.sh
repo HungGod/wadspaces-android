@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # What the app takes from the wadspaces repo beside it (WADSPACES_DIR,
-# default ../wadspaces): the catalog and starters, the goldens its core is
-# checked against (the board's, wad-core's, the phone's planNew cases), the
-# Builder's wallpapers, and the account's Firebase settings (into the
-# gitignored wadspaces.properties). SOURCE says which commit they're from.
+# default ../wadspaces): the catalog and starters, the package graph
+# (packages.json: each app's package and what packages need, for naming a
+# version 4 wadspace's set), the goldens its core is checked against (the
+# board's, design B's board's, wad-core's, the phone's planNew cases), the
+# Builder's wallpapers and textures, and the account's Firebase settings
+# (into the gitignored wadspaces.properties). SOURCE says which commit
+# they're from.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 src=${WADSPACES_DIR:-$here/../wadspaces}
@@ -15,9 +18,12 @@ cp "$src/crates/wad-core/data/catalog.json" "$src/crates/wad-core/data/starters.
 cp "$src/fixtures/board/goldens.json" "$fixtures/board-goldens.json"
 cp "$src/fixtures/board/phone.json" "$fixtures/phone.json"
 cp "$src/fixtures/core/goldens.json" "$fixtures/core-goldens.json"
+cp "$src/fixtures/board/b.json" "$fixtures/b-goldens.json"
+(cd "$src" && cargo xtask packages graph) > "$assets/packages.json"
+cp "$assets/packages.json" "$fixtures/packages.json"
 (cd "$src" && cargo run -q -p wad-wallpaper --example presets -- "$assets/wallpapers")
 commit=$(git -C "$src" rev-parse --short HEAD)
-dirty=$(git -C "$src" status --porcelain -- crates/wad-core/data fixtures crates/wad-wallpaper | head -1)
+dirty=$(git -C "$src" status --porcelain -- crates/wad-core crates/wad-board fixtures crates/wad-wallpaper xtask | head -1)
 echo "${commit}${dirty:+ (with changes)}" > "$here/core/src/test/resources/fixtures/SOURCE"
 cp "$here/core/src/test/resources/fixtures/SOURCE" "$assets/SOURCE"
 toml=$src/host/secrets/firebase.toml
