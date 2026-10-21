@@ -53,6 +53,7 @@ import io.wadspaces.android.AppModel
 import io.wadspaces.android.LibState
 import io.wadspaces.android.StreamActivity
 import io.wadspaces.core.board.Layers
+import io.wadspaces.core.board.V4
 import io.wadspaces.core.firebase.HttpRequest
 import io.wadspaces.core.get
 import io.wadspaces.core.remote.Machine
@@ -81,8 +82,11 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
     val machines by model.machines.collectAsState()
     val runs by model.runs.collectAsState()
     val lib = (state as? LibState.Ready)?.lib ?: return Centered("Your library isn't here yet.")
-    val w = lib.wadspaces.firstOrNull { it.str("id") == id } ?: return Centered("That wadspace is gone.")
-    val ready = machines.filter { it.ready && it.machine.online }.map { it.machine }
+    val w = lib.wadspaces.firstOrNull { it.str("id") == id } ?: lib.v4.firstOrNull { it.str("id") == id } ?: return Centered("That wadspace is gone.")
+    // A version 4 wadspace lives on one machine.
+    val v4 = V4.isV4(w)
+    val home = w.str("machine")
+    val ready = machines.filter { it.ready && it.machine.online && (!v4 || it.machine.id == home) }.map { it.machine }
     var picked by remember { mutableStateOf(startOn) }
     val machine: Machine? = ready.firstOrNull { it.id == picked } ?: ready.firstOrNull()
     var here by remember(machine?.id) { mutableStateOf<RemoteWadspace?>(null) }
@@ -94,9 +98,9 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
     var takeover by remember { mutableStateOf(false) }
     var asked by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val run = runs[id]?.takeIf { it.machine == machine?.id }
+    val run = runs[id]?.takeIf { it.machine == machine?.id || (v4 && it.machine == home) }
     val name = w["customization"].str("name").ifEmpty { "Untitled" }
-    val notReady = Layers.notReady(w, lib.lib())
+    val notReady = if (v4) "Its customization needs a name.".takeIf { w["customization"].str("name").isBlank() } else Layers.notReady(w, lib.lib())
     val streamUp = here?.streamUp == true
     val openable = streamUp && linkOk && share != null
 
@@ -195,6 +199,19 @@ fun WadspaceScreen(model: AppModel, id: String, startOn: String?, buildFirst: Bo
 
             if (notReady != null) {
                 Text(notReady, color = MaterialTheme.colorScheme.error)
+                return@Column
+            }
+            if (ready.isEmpty() && v4) {
+                val on = machines.firstOrNull { it.machine.id == home }
+                Text(
+                    "${on?.machine?.name ?: "Its machine"} isn't reachable from this phone (${on?.status ?: "not seen"}). It builds there anyway: its relay runs the build when it's on.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = { model.buildOnItsMachine(id) }, Modifier.fillMaxWidth(), enabled = run == null || run.finished) {
+                    Text("Build on ${on?.machine?.name ?: "its machine"}")
+                }
+                runs[id]?.let { r -> BuildLog(r.status, r.progress, r.lines, r.error) }
                 return@Column
             }
             if (ready.isEmpty()) {
@@ -303,13 +320,14 @@ private fun BuildLog(status: String, progress: Double, lines: List<String>, erro
             "error" -> "The build failed"
             "cancelled" -> "Cancelled"
             "queued" -> "Waiting for another build"
+            "sent" -> "Sent to its machine"
             "starting" -> "Starting…"
             else -> "Building"
         },
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.SemiBold,
     )
-    if (status !in setOf("done", "error", "cancelled")) {
+    if (status !in setOf("done", "error", "cancelled", "sent")) {
         LinearProgressIndicator(progress = { progress.toFloat().coerceIn(0f, 1f) }, Modifier.fillMaxWidth().padding(vertical = 8.dp))
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }

@@ -51,8 +51,25 @@ private class FakeServer : Http {
         put("wadspaces/cosmic-bodybuilding", """{"version": 3, "owner": "fake", "sharedWith": [], "order": 1, "template": "writing", "customization": {"name": "Cosmic Bodybuilding", "description": "Writing Cosmic Bodybuilding.", "wallpaper": {"type": "gradient", "value": "$nebula"}, "projects": [{"id": "writing", "kind": "github", "repo": "HungGod/Writing", "as": "Writing"}], "secrets": {"bySlot": {}}}, "createdAt": "2026-09-22T00:00:00.000Z", "updatedAt": "2026-09-22T00:00:00.000Z"}""")
         put("wadspaces/vanua-academy", """{"version": 3, "owner": "fake", "sharedWith": [], "order": 2, "template": "dev", "extensions": "vanua-academy-dev", "customization": {"name": "VanuaAcademy", "description": "Building Vanua Academy.", "wallpaper": {"type": "gradient", "value": "$aurora"}, "projects": [], "secrets": {"bySlot": {}}}, "createdAt": "2026-09-22T00:00:00.000Z", "updatedAt": "2026-09-22T00:00:00.000Z"}""")
         put("users/fake/github/repos", """{"login": "HungGod", "repos": [{"fullName": "HungGod/Writing", "name": "Writing", "private": true, "url": "", "defaultBranch": "main", "description": "Notes and drafts"}, {"fullName": "HungGod/VanuaAcademy", "name": "VanuaAcademy", "private": false, "url": "", "defaultBranch": "main", "description": "The academy's site"}, {"fullName": "HungGod/WadSpaces", "name": "WadSpaces", "private": false, "url": "", "defaultBranch": "main", "description": ""}]}""")
+        // Design B's: IntelligenceQuest on the Surface (built there), Desk Lab on the Desk.
+        put("wadspaces/intelligencequest", """{"version": 4, "owner": "fake", "sharedWith": [], "machine": "surface", "order": 1,
+            "templates": [
+              {"id": "dev", "name": "Dev", "apps": [
+                {"app": "wadbrowser", "mode": "focus", "extras": [{"id": "github", "name": "GitHub", "url": "https://github.com"}, {"id": "docs-rs", "name": "Docs.rs", "url": "https://docs.rs"}]},
+                {"app": "vscode", "extras": [{"id": "anthropic.claude-code"}]}]},
+              {"id": "rust", "name": "C++ to Rust", "apps": [
+                {"app": "vscode", "extras": [{"id": "rust-lang.rust-analyzer"}]},
+                {"app": "terminal", "extras": [{"id": "cpp"}, {"id": "rust"}]}]},
+              {"id": "art", "name": "Game art", "apps": [{"app": "libresprite"}, {"app": "tiled"}]}],
+            "customization": {"name": "IntelligenceQuest", "description": "Moving the game from C++ to Rust.", "wallpaper": {"type": "texture", "value": "stars"},
+              "projects": [{"id": "iq", "kind": "github", "repo": "HungGod/IntelligenceQuest", "as": "IntelligenceQuest"}], "secrets": {"bySlot": {}, "groups": []}},
+            "createdAt": "2026-10-21T00:00:00.000Z", "updatedAt": "2026-10-21T00:00:00.000Z"}""")
+        put("wadspaces/desk-lab", """{"version": 4, "owner": "fake", "sharedWith": [], "machine": "desk", "order": 1,
+            "templates": [{"id": "lab", "name": "Lab", "apps": [{"app": "obsidian"}]}],
+            "customization": {"name": "Desk Lab", "description": "Lives on the desk.", "wallpaper": {"type": "texture", "value": "marble"}, "projects": [], "secrets": {"bySlot": {}, "groups": []}},
+            "createdAt": "2026-10-21T00:00:00.000Z", "updatedAt": "2026-10-21T00:00:00.000Z"}""")
         val now = Values.rfc3339(System.currentTimeMillis())
-        put("users/fake/machines/surface", """{"name": "Surface", "hostname": "wadspaces", "lastSeen": "$now", "tailnet": {"state": "running", "ips": ["$surface", "fd7a:115c:a1e0::a01:2b03"], "dnsName": "wadspaces-surface.tail1234.ts.net", "port": 8087, "listening": true}, "images": [{"layer": "base"}, {"layer": "template:writing"}, {"layer": "template:dev"}, {"layer": "custom:vanua-academy-dev"}]}""")
+        put("users/fake/machines/surface", """{"name": "Surface", "hostname": "wadspaces", "lastSeen": "$now", "tailnet": {"state": "running", "ips": ["$surface", "fd7a:115c:a1e0::a01:2b03"], "dnsName": "wadspaces-surface.tail1234.ts.net", "port": 8087, "listening": true}, "images": [{"layer": "base", "id": "b1"}, {"layer": "template:writing"}, {"layer": "template:dev"}, {"layer": "custom:vanua-academy-dev"}, {"layer": "set:9ee4c0aa0079", "id": "s1", "from": "b1"}]}""")
         put("users/fake/machines/desk", """{"name": "Desk", "hostname": "desk", "lastSeen": "2026-10-15T08:00:00.000Z"}""")
     }
 
@@ -93,12 +110,12 @@ private class FakeServer : Http {
         fun built(id: String) = docs["built/$id"] != null
         return when {
             path == "/v1/remote/hello" -> ok(json.parseToJsonElement("""{"machine": "Surface", "machineId": "surface", "version": "0.1.0", "device": "Pixel 9", "trust": "trusted"}"""))
-            path == "/v1/remote/wadspaces" -> ok(JsonArray(listOf("cosmic-bodybuilding" to "Cosmic Bodybuilding", "vanua-academy" to "VanuaAcademy").map { (id, name) ->
+            path == "/v1/remote/wadspaces" -> ok(JsonArray(listOf("cosmic-bodybuilding" to "Cosmic Bodybuilding", "vanua-academy" to "VanuaAcademy", "intelligencequest" to "IntelligenceQuest").map { (id, name) ->
                 buildJsonObject {
                     put("id", id)
                     put("name", name)
-                    put("layer", "template:$id")
-                    put("built", id == "cosmic-bodybuilding" || built(id))
+                    put("layer", if (id == "intelligencequest") "set:9ee4c0aa0079" else "template:$id")
+                    put("built", id == "cosmic-bodybuilding" || id == "intelligencequest" || built(id))
                     put("container", if (id in streamed) "running" else "exited")
                     if (id in streamed) {
                         put("streamed", true)

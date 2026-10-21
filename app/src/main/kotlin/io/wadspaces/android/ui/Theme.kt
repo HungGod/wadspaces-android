@@ -45,19 +45,32 @@ private val dark = darkColorScheme(
     error = Wad.danger,
 )
 
+// Strictly greyscale (as the WadSpaces Client's light theme).
 private val light = lightColorScheme(
-    primary = Color(0xFF0A0614),
+    primary = Color(0xFF0A0A0A),
     onPrimary = Color.White,
-    secondary = Color(0xFFD81B60),
-    tertiary = Color(0xFF1679B8),
-    background = Color(0xFFF7F5FB),
-    onBackground = Color(0xFF0A0614),
+    primaryContainer = Color(0xFFE6E6E6),
+    onPrimaryContainer = Color(0xFF0A0A0A),
+    secondary = Color(0xFF7A7A7A),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFEDEDED),
+    onSecondaryContainer = Color(0xFF0A0A0A),
+    tertiary = Color(0xFF3D3D3D),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFEBEBEB),
+    onTertiaryContainer = Color(0xFF0A0A0A),
+    background = Color(0xFFF4F4F4),
+    onBackground = Color(0xFF0A0A0A),
     surface = Color.White,
-    onSurface = Color(0xFF0A0614),
-    surfaceVariant = Color(0xFFEEEAF5),
+    onSurface = Color(0xFF0A0A0A),
+    surfaceVariant = Color(0xFFF6F6F6),
     onSurfaceVariant = Color(0xFF5F5F5F),
-    outline = Color(0x2E0A0614),
-    outlineVariant = Color(0x170A0614),
+    surfaceContainer = Color(0xFFF6F6F6),
+    surfaceContainerHigh = Color(0xFFEDEDED),
+    surfaceContainerHighest = Color(0xFFE6E6E6),
+    outline = Color(0x2E000000),
+    outlineVariant = Color(0x17000000),
+    error = Color(0xFF3A3A3A),
 )
 
 @Composable

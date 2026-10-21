@@ -2,7 +2,12 @@ package io.wadspaces.android
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.wadspaces.core.board.BMachine
+import io.wadspaces.core.board.BWadspace
+import io.wadspaces.core.board.Board
+import io.wadspaces.core.board.Op
 import io.wadspaces.core.board.Sync
+import io.wadspaces.core.board.V4
 import io.wadspaces.core.builder.Builder
 import io.wadspaces.core.builder.Customization
 import io.wadspaces.core.builder.ExtensionsPick
@@ -13,6 +18,7 @@ import io.wadspaces.core.library.Library
 import io.wadspaces.core.remote.Machine
 import io.wadspaces.core.remote.RemoteFailure
 import io.wadspaces.core.remote.RemoteHello
+import io.wadspaces.core.str
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,14 +37,27 @@ sealed interface LibState {
 data class BuildRun(
     val machine: String,
     val buildId: String? = null,
-    /** "starting", "queued", "building", "done", "error", "cancelled". */
+    /** "starting", "queued", "building", "done", "error", "cancelled"; "sent": a command its relay runs. */
     val status: String = "starting",
     val progress: Double = 0.0,
     val lines: List<String> = emptyList(),
     val error: String? = null,
 ) {
-    val finished get() = status in setOf("done", "error", "cancelled")
+    val finished get() = status in setOf("done", "error", "cancelled", "sent")
 }
+
+/**
+ * Design B's board on the phone (core's Board): the account's version 4
+ * wadspaces, each edit saved behind it. `rev` changes with every change, so
+ * screens draw it again.
+ */
+data class BoardState(
+    val board: Board,
+    val rev: Int = 0,
+    val saving: Boolean = false,
+    /** Why the last save failed, until one goes through. */
+    val error: String? = null,
+)
 
 /** One of the owner's machines, and how this phone gets on with it. */
 data class MachineView(
@@ -82,6 +101,14 @@ class AppModel(val g: Graph) : ViewModel() {
     private val _runs = MutableStateFlow<Map<String, BuildRun>>(emptyMap())
     /** Builds asked for from here, by wadspace. */
     val runs: StateFlow<Map<String, BuildRun>> = _runs
+
+    private val _board = MutableStateFlow<BoardState?>(null)
+    /** Design B's board (null until the library's read). */
+    val board: StateFlow<BoardState?> = _board
+
+    /** Design B's documents as last saved (what a save compares to), and the writes out. */
+    private var saved: List<BWadspace> = emptyList()
+    private var pending = 0
 
     init {
         if (_session.value != null) refresh()
@@ -129,6 +156,103 @@ class AppModel(val g: Graph) : ViewModel() {
         }
     }
 
+    private fun now() = Values.rfc3339(System.currentTimeMillis())
+
+    /** Wadspaces as JSON, in id order (the library's order isn't the board's). */
+    private fun byId(ws: List<BWadspace>) = ws.sortedBy { it.id }.map { it.json() }
+
+    /** Design B's board from the library, unless its own writes are out or it has changes not saved. */
+    private fun boardFrom(lib: Library) {
+        val machines = lib.machines.map { BMachine(it.str("id"), it.str("name").ifEmpty { it.str("hostname") }) }
+        val docs = lib.v4.map(BWadspace::of)
+        val cur = _board.value
+        if (cur != null) {
+            cur.board.machines = machines
+            cur.board.reserved = lib.wadspaces.map { it.str("id") }
+            val unsaved = cur.board.plan(saved, "", "").isNotEmpty()
+            if (pending > 0 || unsaved || byId(docs) == byId(saved)) {
+                _board.value = cur.copy(rev = cur.rev + 1)
+                return
+            }
+        }
+        saved = docs
+        _board.value = BoardState(lib.board(machines, now()), (cur?.rev ?: 0) + 1)
+    }
+
+    /** Edits of design B's board, made as one (one Undo) and saved: why not, if they couldn't be. */
+    fun edit(vararg ops: Op): String? {
+        val st = _board.value ?: return "Your library isn't here yet."
+        st.board.now = now()
+        val why = if (ops.toList() == listOf(Op.Undo)) st.board.apply(Op.Undo, g.packages) else st.board.applyAll(ops.toList(), g.packages)
+        if (why != null) return why
+        _board.value = st.copy(rev = st.rev + 1)
+        saveBoard()
+        return null
+    }
+
+    /** What changed on the board, written: the library at once, the account behind. */
+    fun saveBoard() {
+        val st = _board.value ?: return
+        val uid = g.auth.uid ?: return
+        val plan = st.board.plan(saved, uid, now())
+        if (plan.isEmpty()) return
+        val docs = plan.map(BWadspace::of)
+        val before = saved
+        saved = saved.filter { s -> docs.none { it.id == s.id } } + docs
+        // The board's as saved: its places, owner and times.
+        for (d in docs) st.board.get(d.id)?.let { w ->
+            w.order = d.order
+            w.owner = d.owner
+            w.createdAt = d.createdAt
+            w.updatedAt = d.updatedAt
+        }
+        lib()?.let { l -> _library.value = LibState.Ready(l.copy(v4 = l.v4.filter { v -> plan.none { it.str("id") == v.str("id") } } + plan)) }
+        pending++
+        _board.value = st.copy(rev = st.rev + 1, saving = true, error = null)
+        viewModelScope.launch {
+            val r = runCatching { g.account.saveWadspaces(plan) }
+            pending--
+            if (r.isFailure) saved = before
+            val cur = _board.value ?: return@launch
+            _board.value = cur.copy(
+                rev = cur.rev + 1,
+                saving = pending > 0,
+                error = r.exceptionOrNull()?.let { "Couldn't save the board: ${it.message}. Your changes are kept here." },
+            )
+        }
+    }
+
+    /** Where a design B wadspace stands on its machine: "building", "built", "update", "never", or "unknown". */
+    fun standing(w: BWadspace): String {
+        val run = _runs.value[w.id]
+        if (run != null && !run.finished) return "building"
+        val m = _machines.value.firstOrNull { it.machine.id == w.machine }?.machine ?: return "unknown"
+        if (m.images.isEmpty()) return "unknown"
+        return V4.state(w.json(), m.images, g.packages)
+    }
+
+    /**
+     * Builds a design B wadspace where it lives: over the tailnet when its
+     * machine trusts this phone, else as a command its relay runs. (Either
+     * reads the saved document: after the board's writes.)
+     */
+    fun buildOnItsMachine(id: String) {
+        val w = _board.value?.board?.get(id) ?: return
+        viewModelScope.launch {
+            var waited = 0
+            while (pending > 0 && waited++ < 50) delay(200)
+            val mv = _machines.value.firstOrNull { it.machine.id == w.machine }
+            if (mv != null && mv.ready && mv.machine.online) {
+                build(id, mv.machine)
+                return@launch
+            }
+            val name = mv?.machine?.name ?: "its machine"
+            runCatching { g.account.command(w.machine, "build", id) }
+                .onSuccess { run(id) { BuildRun(w.machine, status = "sent", lines = listOf("Sent to $name: its relay builds it within a few seconds when it's on.")) } }
+                .onFailure { e -> run(id) { BuildRun(w.machine, status = "error", error = e.message ?: "Couldn't ask $name.") } }
+        }
+    }
+
     /** Signed in with the sign-in page's GitHub token. */
     suspend fun signIn(githubToken: String) {
         _session.value = g.auth.signInWithGithub(githubToken)
@@ -140,6 +264,8 @@ class AppModel(val g: Graph) : ViewModel() {
         _session.value = null
         _library.value = LibState.Loading
         _machines.value = emptyList()
+        _board.value = null
+        saved = emptyList()
     }
 
     /** The library read again, and each machine asked how it is. */
@@ -149,6 +275,7 @@ class AppModel(val g: Graph) : ViewModel() {
                 val lib = g.account.library()
                 _library.value = LibState.Ready(lib)
                 machinesFrom(lib)
+                boardFrom(lib)
             } catch (e: Exception) {
                 if (g.auth.session == null) _session.value = null
                 if (_library.value !is LibState.Ready) _library.value = LibState.Failed(e.message ?: "Couldn't read your library.")
@@ -164,6 +291,7 @@ class AppModel(val g: Graph) : ViewModel() {
                 val fresh = lib.copy(machines = hbs)
                 _library.value = LibState.Ready(fresh)
                 machinesFrom(fresh)
+                boardFrom(fresh)
             }
         }
     }

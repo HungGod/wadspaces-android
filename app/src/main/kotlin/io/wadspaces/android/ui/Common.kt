@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,13 +33,28 @@ import io.wadspaces.core.builder.Catalog
 import io.wadspaces.core.str
 import kotlinx.serialization.json.JsonElement
 
-/** A wadspace's wallpaper: a preset's picture, a colour, a picture of its own, else the brand's colours. */
+/** A texture's picture (synced from wadspaces: wallpapers/texture-<id>-<tone>.png), in the theme's tone. */
+@Composable
+fun textureBitmap(id: String): ImageBitmap? {
+    val ctx = LocalContext.current
+    val tone = if (isSystemInDarkTheme()) "dark" else "light"
+    return remember(id, tone) {
+        runCatching { ctx.assets.open("wallpapers/texture-$id-$tone.png").use { BitmapFactory.decodeStream(it).asImageBitmap() } }.getOrNull()
+    }
+}
+
+/**
+ * A wadspace's wallpaper: a texture (version 4's, in the theme's tone), a
+ * preset's picture, a colour, a picture of its own, else the brand's colours
+ * (black or white, for a version 4 wadspace with none).
+ */
 @Composable
 fun Wallpaper(wallpaper: JsonElement?, catalog: Catalog, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val type = wallpaper.str("type")
     val value = wallpaper.str("value")
-    val image: ImageBitmap? = remember(type, value) {
+    val texture = if (type == "texture") textureBitmap(value) else null
+    val image: ImageBitmap? = texture ?: remember(type, value) {
         val preset = catalog.presets.firstOrNull { it.wallpaper.str("value") == value }
         when {
             preset != null -> runCatching {

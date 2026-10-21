@@ -78,6 +78,17 @@ class LibraryTest {
     }
 
     @Test
+    fun aBuildForAnotherMachineIsACommandItsRelayRuns() = runBlocking<Unit> {
+        val http = FakeHttp { HttpResponse(200, "{}") }
+        account(http).command("m-desk", "build", "iq")
+        val w = json.parseToJsonElement(http.asked[0].body!!).jsonObject["writes"]!!.jsonArray[0].jsonObject
+        assertTrue(w["update"]!!.jsonObject["name"].toString().contains("users/u1/machines/m-desk/commands/"))
+        val fields = w["update"]!!.jsonObject["fields"]!!.jsonObject
+        assertEquals(json.parseToJsonElement("""{"stringValue": "build"}"""), fields["type"])
+        assertEquals(json.parseToJsonElement("""{"stringValue": "iq"}"""), fields["wsId"])
+    }
+
+    @Test
     fun deletedOnesArentLive() {
         val lib = Library(
             wadspaces = listOf(

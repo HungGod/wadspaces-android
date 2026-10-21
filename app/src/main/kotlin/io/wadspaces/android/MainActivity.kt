@@ -29,7 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import io.wadspaces.android.ui.BuilderScreen
+import io.wadspaces.android.ui.BuilderBScreen
 import io.wadspaces.android.ui.HomeScreen
 import io.wadspaces.android.ui.MachinesScreen
 import io.wadspaces.android.ui.SignInScreen
@@ -111,7 +111,7 @@ fun App(model: AppModel, start: String?) {
             when (val s = screen) {
                 Screen.Home -> HomeScreen(model, open = { screen = Screen.Wadspace(it) }, create = { screen = Screen.Builder })
                 Screen.Machines -> MachinesScreen(model)
-                Screen.Builder -> BuilderScreen(model, saved = { id, machine -> screen = Screen.Wadspace(id, machine, machine != null) })
+                Screen.Builder -> BuilderBScreen(model, open = { screen = Screen.Wadspace(it) })
                 is Screen.Wadspace -> WadspaceScreen(model, s.id, s.machine, s.build, back = { screen = Screen.Home })
             }
         }

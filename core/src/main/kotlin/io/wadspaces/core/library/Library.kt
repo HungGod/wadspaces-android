@@ -149,6 +149,20 @@ class Account(val auth: Auth, val firestore: Firestore) {
         if (writes.isNotEmpty()) firestore.commit(writes)
     }
 
+    /**
+     * A command for one of their machines (its relay runs it within a few
+     * seconds of being on): building a wadspace there, say.
+     */
+    suspend fun command(machine: String, type: String, wsId: String) {
+        val data = buildJsonObject {
+            put("type", type)
+            put("status", "pending")
+            put("wsId", wsId)
+        }
+        val id = (1..20).map { "abcdefghijklmnopqrstuvwxyz0123456789"[random.nextInt(36)] }.joinToString("")
+        firestore.commit(listOf(Write("users/${uid()}/machines/$machine/commands/$id", data, serverTime = listOf("createdAt"))))
+    }
+
     /** A one-time code for linking a machine (wadd's /v1/cloud/link takes it). */
     suspend fun createEnrollCode(machineName: String): String {
         val code = randomCode()
